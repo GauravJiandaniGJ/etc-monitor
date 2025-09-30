@@ -25,26 +25,47 @@ class DeadlineAgent:
         self.timezone = pytz.timezone(timezone)
         self.reminders: Dict[str, Reminder] = {}
 
-        # Simple, flexible patterns that work with long messages
+        # Comprehensive patterns that work with long messages
         self.deadline_patterns = [
             # Relative time patterns (most reliable)
             r"in\s+(\d+\s+(?:seconds?|secs?|minutes?|mins?|hours?|hrs?|days?|weeks?|months?))",
-            
+
+            # "at" time patterns
+            r"at\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm|AM|PM))",
+            r"at\s+(evening|morning|noon|midnight)",
+
             # "by" patterns
+            r"by\s+(EOD|eod|end of day)",
+            r"by\s+(evening|night|morning|noon|midnight)",
+            r"by\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm|AM|PM))",
             r"by\s+(.+?)(?:\s|$|\.|\,|\!|\?)",
-            
-            # "deadline" patterns  
+
+            # "till" patterns
+            r"till\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm|AM|PM))",
+            r"till\s+(evening|night|morning|noon|midnight)",
+
+            # Date patterns
+            r"in\s+(\d{1,2}(?:st|nd|rd|th)?\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec))",
+            r"on\s+(\d{1,2}(?:st|nd|rd|th)?\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec))",
+            r"till\s+(\d{1,2}(?:st|nd|rd|th)?\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec))",
+            r"by\s+(\d{1,2}(?:st|nd|rd|th)?\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec))",
+            r"(\d{1,2}(?:st|nd|rd|th)?\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec))",
+
+            # Single word time references
+            r"^(evening|morning|noon|midnight|tonight|today|tomorrow)$",
+
+            # "deadline" patterns
             r"deadline[:\s]+(.+?)(?:\s|$|\.|\,|\!|\?)",
-            
+
             # "due" patterns
             r"due[:\s]+(.+?)(?:\s|$|\.|\,|\!|\?)",
-            
+
             # "will [action] by/in" patterns (flexible)
             r"will\s+\w+.*?(?:by|in)\s+(.+?)(?:\s|$|\.|\,|\!|\?)",
-            
+
             # "i will [action] by/in" patterns
             r"i\s+will\s+\w+.*?(?:by|in)\s+(.+?)(?:\s|$|\.|\,|\!|\?)",
-            
+
             # "before" patterns
             r"before\s+(.+?)(?:\s|$|\.|\,|\!|\?)",
         ]
@@ -55,14 +76,14 @@ class DeadlineAgent:
         Returns the first matched deadline text or None.
         """
         print(f"Analyzing message: '{message}'")
-        
+
         for i, pattern in enumerate(self.deadline_patterns):
             match = re.search(pattern, message, re.IGNORECASE)
             if match:
                 matched_text = match.group(1).strip()
                 print(f"Pattern {i+1} matched: '{pattern}' -> '{matched_text}'")
                 return matched_text
-        
+
         print("No pattern matched")
         return None
 
@@ -71,15 +92,43 @@ class DeadlineAgent:
         Parse datetime from text, supporting both absolute and relative formats.
         """
         print(f"Parsing datetime from: '{date_text}'")
-        
-        # Handle relative time expressions first (more reliable)
+
+        now = datetime.now(self.timezone)
+
+        # Handle common time expressions first
+        date_text_lower = date_text.lower().strip()
+
+        # EOD (End of Day) - 6 PM
+        if date_text_lower in ['eod', 'end of day']:
+            today = now.replace(hour=18, minute=0, second=0, microsecond=0)
+            if today <= now:
+                today += timedelta(days=1)
+            print(f"EOD parsed: {today}")
+            return today
+
+        # Time of day expressions
+        time_mappings = {
+            'morning': 9,
+            'noon': 12,
+            'evening': 18,
+            'night': 21,
+            'midnight': 0
+        }
+
+        if date_text_lower in time_mappings:
+            hour = time_mappings[date_text_lower]
+            target_time = now.replace(hour=hour, minute=0, second=0, microsecond=0)
+            if target_time <= now:
+                target_time += timedelta(days=1)
+            print(f"Time expression parsed: {target_time}")
+            return target_time
+
+        # Handle relative time expressions
         relative_match = re.search(r'(\d+)\s+(seconds?|secs?|minutes?|mins?|hours?|hrs?|days?|weeks?|months?)', date_text, re.IGNORECASE)
         if relative_match:
             amount = int(relative_match.group(1))
             unit = relative_match.group(2).lower()
 
-            now = datetime.now(self.timezone)
-            
             if unit in ['second', 'seconds', 'sec', 'secs']:
                 future_time = now + timedelta(seconds=amount)
             elif unit in ['minute', 'minutes', 'min', 'mins']:
@@ -97,6 +146,33 @@ class DeadlineAgent:
 
             print(f"Relative time parsed: {future_time}")
             return future_time
+
+        # Handle specific date patterns (e.g., "2nd Oct", "15th Dec")
+        date_pattern = re.search(r'(\d{1,2})(?:st|nd|rd|th)?\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)', date_text, re.IGNORECASE)
+        if date_pattern:
+            day = int(date_pattern.group(1))
+            month_name = date_pattern.group(2).lower()
+
+            # Map month names to numbers
+            month_map = {
+                'jan': 1, 'feb': 2, 'mar': 3, 'apr': 4, 'may': 5, 'jun': 6,
+                'jul': 7, 'aug': 8, 'sep': 9, 'oct': 10, 'nov': 11, 'dec': 12
+            }
+
+            if month_name in month_map:
+                month = month_map[month_name]
+                year = now.year
+
+                # If the date is in the past this year, assume next year
+                try:
+                    target_date = now.replace(year=year, month=month, day=day, hour=18, minute=0, second=0, microsecond=0)
+                    if target_date <= now:
+                        target_date = target_date.replace(year=year + 1)
+                    print(f"Specific date parsed: {target_date}")
+                    return target_date
+                except ValueError:
+                    # Invalid date (e.g., Feb 30th)
+                    pass
 
         # Use dateparser for absolute dates
         parsed_date = dateparser.parse(date_text, settings={
@@ -149,7 +225,7 @@ class DeadlineAgent:
 
         # Store reminder
         self.reminders[reminder_id] = reminder
-        
+
         print(f"✅ Reminder created: {deadline_text} -> {due_at}")
         return reminder
 

@@ -1,6 +1,6 @@
 import os
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 from dotenv import load_dotenv
 import dateparser
 from slack_bolt import App
@@ -21,8 +21,15 @@ app = App(
 scheduler = BackgroundScheduler()
 scheduler.start()
 
-# Initialize DeadlineAgent
-deadline_agent = DeadlineAgent(timezone='UTC')
+# Track processed messages to avoid duplicates
+processed_messages = set()
+
+# Initialize DeadlineAgent with IST timezone
+import pytz
+from tzlocal import get_localzone
+local_tz = pytz.timezone('Asia/Kolkata')  # IST timezone
+deadline_agent = DeadlineAgent(timezone='Asia/Kolkata')
+print(f"🌍 Using timezone: {local_tz}")
 
 def send_reminder(channel, thread_ts, user_id, original_message):
     """Send the reminder message"""
@@ -40,6 +47,14 @@ def send_reminder(channel, thread_ts, user_id, original_message):
 def handle_message_events(body, event, say, logger):
     """Handle all message events"""
     try:
+        # Create unique message ID to prevent duplicates
+        message_id = f"{event.get('channel')}_{event.get('ts')}_{event.get('user')}"
+
+        if message_id in processed_messages:
+            print(f"🔄 Duplicate message ignored: {message_id}")
+            return
+
+        processed_messages.add(message_id)
         print(f"📨 Message received: {event}")
 
         # Skip bot messages
@@ -88,12 +103,29 @@ def handle_message_events(body, event, say, logger):
 
             print(f"⏰ Reminder scheduled for: {reminder.due_at}")
 
-            # Format deadline for display
-            deadline_str = reminder.due_at.strftime('%I:%M %p')
+            # Debug: Show current time and calculated time
+            current_time = datetime.now(local_tz)
+            print(f"🕐 Current time: {current_time}")
+            print(f"🎯 Calculated deadline: {reminder.due_at}")
+
+            # Format deadline for display in local timezone with date
+            local_time = reminder.due_at.astimezone(local_tz)
+            current_date = datetime.now(local_tz).date()
+            deadline_date = local_time.date()
+
+            # Show date only if it's not today
+            if deadline_date == current_date:
+                deadline_str = local_time.strftime('%I:%M %p')
+            elif deadline_date == current_date + timedelta(days=1):
+                deadline_str = f"tomorrow at {local_time.strftime('%I:%M %p')}"
+            else:
+                deadline_str = local_time.strftime('%b %d at %I:%M %p')
+
+            print(f"📅 Display time: {deadline_str}")
 
             # Confirm in thread
             say(
-                text=f"Deadline confirmed for <@{user}> at {deadline_str}",
+                text=f"ETC confirmed for <@{user}> at {deadline_str}",
                 thread_ts=thread_ts
             )
         else:
