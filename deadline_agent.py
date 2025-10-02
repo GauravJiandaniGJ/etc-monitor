@@ -25,9 +25,71 @@ class DeadlineAgent:
         self.timezone = pytz.timezone(timezone)
         self.reminders: Dict[str, Reminder] = {}
 
-        # Comprehensive patterns that work with long messages
+        # Comprehensive patterns that work with long messages and natural language
+        # Order matters - more specific patterns first
         self.deadline_patterns = [
-            # Relative time patterns (most reliable)
+            # Specific date with time patterns (most specific first)
+            r"(\d{1,2}(?:st|nd|rd|th)?\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\s+\d{4}\s+\d{1,2}(?::\d{2})?\s*(?:am|pm|AM|PM))",
+            r"(\d{1,2}(?:st|nd|rd|th)?\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\s+\d{1,2}(?::\d{2})?\s*(?:am|pm|AM|PM))",
+            r"(\d{1,2}(?:st|nd|rd|th)?\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\s+at\s+\d{1,2}(?::\d{2})?\s*(?:am|pm|AM|PM))",
+            r"(\d{1,2}(?:st|nd|rd|th)?\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\s+(?:morning|evening|night))",
+
+            # Short month format with time patterns
+            r"((?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\s+\d{1,2}\s+\d{1,2}(?::\d{2})?\s*(?:am|pm|AM|PM))",
+            r"((?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\s+\d{1,2}\s+at\s+\d{1,2}(?::\d{2})?\s*(?:am|pm|AM|PM))",
+            r"((?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\s+\d{1,2}\s+(?:morning|evening|night))",
+            r"((?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\s+\d{1,2}\s+at\s+\d{1,2}(?::\d{2})?)",
+
+            # Days of the week patterns with natural language
+            r"(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\s+at\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm|AM|PM))",
+            r"(next-to-next|next\s+to\s+next|after\s+next)\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\s+at\s+(\d{1,2}(?::\d{2})?)",
+            r"(next-to-next|next\s+to\s+next|after\s+next)\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)",
+            r"(next\s+)?(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\s+at\s+(\d{1,2}(?::\d{2})?)",
+            r"(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\s+at\s+(\d{1,2}(?::\d{2})?)",
+            r"(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\s+morning",
+            r"(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\s+evening",
+            r"(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\s+night",
+            r"on\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)",
+            r"by\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)",
+            r"till\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)",
+            r"this\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)",
+            r"next\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)",
+
+            # Enhanced natural language patterns
+            r"(before|after|on|in|at|particular|on\s+that\s+day|after\s+that)\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)",
+            r"(before|after|on|in|at|particular|on\s+that\s+day|after\s+that)\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\s+at\s+(\d{1,2}(?::\d{2})?)",
+            r"(before|after|on|in|at|particular|on\s+that\s+day|after\s+that)\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm|AM|PM))",
+
+            # Week patterns
+            r"(this\s+week|next\s+week|coming\s+week)",
+            r"(this\s+week|next\s+week|coming\s+week)\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)",
+            r"(this\s+week|next\s+week|coming\s+week)\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\s+at\s+(\d{1,2}(?::\d{2})?)",
+
+            # Time expressions with natural language
+            r"(before|after|on|in|at|particular|on\s+that\s+day|after\s+that)\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm|AM|PM))",
+            r"(before|after|on|in|at|particular|on\s+that\s+day|after\s+that)\s+(morning|evening|night|noon|midnight)",
+
+            # Date patterns with natural language
+            r"(before|after|on|in|at|particular|on\s+that\s+day|after\s+that)\s+(\d{1,2}(?:st|nd|rd|th)?\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec))",
+            r"(before|after|on|in|at|particular|on\s+that\s+day|after\s+that)\s+((?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\s+\d{1,2})",
+            r"(before|after|on|in|at|particular|on\s+that\s+day|after\s+that)\s+(\d{1,2}(?:st|nd|rd|th)?\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\s+at\s+\d{1,2}(?::\d{2})?)",
+
+            # Flexible time expressions
+            r"(in\s+)?(\d+)\s+(seconds?|secs?|minutes?|mins?|hours?|hrs?|days?|weeks?|months?)\s+(before|after|from\s+now|later)",
+            r"(in\s+)?(\d+)\s+(seconds?|secs?|minutes?|mins?|hours?|hrs?|days?|weeks?|months?)\s+(before|after|from\s+now|later)\s+(morning|evening|night)",
+
+            # Common informal expressions
+            r"(tonight|today|tomorrow|day\s+after\s+tomorrow|yesterday)",
+            r"(tonight|today|tomorrow|day\s+after\s+tomorrow|yesterday)\s+at\s+(\d{1,2}(?::\d{2})?)",
+            r"(tonight|today|tomorrow|day\s+after\s+tomorrow|yesterday)\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm|AM|PM))",
+            r"(tonight|today|tomorrow|day\s+after\s+tomorrow|yesterday)\s+(morning|evening|night|noon|midnight)",
+
+            # EOD and time of day variations
+            r"(eod|end\s+of\s+day|end\s+of\s+work|close\s+of\s+business|cob)",
+            r"(morning|evening|night|noon|midnight|dawn|dusk)",
+            r"(early\s+morning|late\s+evening|late\s+night|early\s+evening)",
+
+            # Relative time patterns (most specific first)
             r"in\s+(\d+\s+(?:seconds?|secs?|minutes?|mins?|hours?|hrs?|days?|weeks?|months?))",
 
             # "at" time patterns
@@ -44,15 +106,18 @@ class DeadlineAgent:
             r"till\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm|AM|PM))",
             r"till\s+(evening|night|morning|noon|midnight)",
 
-            # Date patterns
+            # Date patterns (without time)
             r"in\s+(\d{1,2}(?:st|nd|rd|th)?\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec))",
             r"on\s+(\d{1,2}(?:st|nd|rd|th)?\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec))",
             r"till\s+(\d{1,2}(?:st|nd|rd|th)?\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec))",
             r"by\s+(\d{1,2}(?:st|nd|rd|th)?\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec))",
             r"(\d{1,2}(?:st|nd|rd|th)?\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec))",
 
+            # Short month format without time
+            r"((?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\s+\d{1,2})(?:\s|$)",
+
             # Single word time references
-            r"^(evening|morning|noon|midnight|tonight|today|tomorrow)$",
+            r"^(evening|morning|noon|midnight|tonight|today|tomorrow|eod|monday|tuesday|wednesday|thursday|friday|saturday|sunday)$",
 
             # "deadline" patterns
             r"deadline[:\s]+(.+?)(?:\s|$|\.|\,|\!|\?)",
@@ -80,9 +145,37 @@ class DeadlineAgent:
         for i, pattern in enumerate(self.deadline_patterns):
             match = re.search(pattern, message, re.IGNORECASE)
             if match:
-                matched_text = match.group(1).strip()
-                print(f"Pattern {i+1} matched: '{pattern}' -> '{matched_text}'")
-                return matched_text
+                # Always try to return the full match first
+                full_match = match.group(0).strip()
+                print(f"Pattern {i+1} matched: '{pattern}' -> '{full_match}'")
+
+                # For patterns that match the full message, return the full message
+                if full_match == message.strip():
+                    print(f"Full message match: '{message}'")
+                    return message.strip()
+
+                # For patterns with multiple groups, try to get meaningful text
+                if len(match.groups()) > 1:
+                    # Check if this is a "next day at time" pattern
+                    if 'next' in pattern and 'at' in pattern:
+                        return full_match
+                    else:
+                        # Use the first non-empty group
+                        matched_text = None
+                        for group in match.groups():
+                            if group and group.strip():
+                                matched_text = group.strip()
+                                break
+                        if matched_text:
+                            return matched_text
+
+                # For single group patterns, return the group
+                if len(match.groups()) == 1:
+                    matched_text = match.group(1).strip()
+                    return matched_text
+
+                # Fallback to full match
+                return full_match
 
         print("No pattern matched")
         return None
@@ -98,13 +191,183 @@ class DeadlineAgent:
         # Handle common time expressions first
         date_text_lower = date_text.lower().strip()
 
-        # EOD (End of Day) - 6 PM
-        if date_text_lower in ['eod', 'end of day']:
+        # EOD and work-related expressions - 6 PM
+        eod_expressions = ['eod', 'end of day', 'end of work', 'close of business', 'cob']
+        if any(expr in date_text_lower for expr in eod_expressions):
             today = now.replace(hour=18, minute=0, second=0, microsecond=0)
             if today <= now:
                 today += timedelta(days=1)
             print(f"EOD parsed: {today}")
             return today
+
+        # Handle days of the week
+        day_mappings = {
+            'monday': 0, 'tuesday': 1, 'wednesday': 2, 'thursday': 3,
+            'friday': 4, 'saturday': 5, 'sunday': 6
+        }
+
+        # Handle week expressions first
+        if 'this week' in date_text_lower or 'coming week' in date_text_lower:
+            # Find day of week in the text
+            for day_name, day_num in day_mappings.items():
+                if day_name in date_text_lower:
+                    current_weekday = now.weekday()
+                    days_ahead = (day_num - current_weekday) % 7
+                    if days_ahead == 0:  # If it's the same day, use today
+                        days_ahead = 0
+                    target_date = now + timedelta(days=days_ahead)
+                    break
+        elif 'next week' in date_text_lower:
+            # Find day of week in the text
+            for day_name, day_num in day_mappings.items():
+                if day_name in date_text_lower:
+                    current_weekday = now.weekday()
+                    days_ahead = (day_num - current_weekday) % 7 + 7  # Add 7 for next week
+                    target_date = now + timedelta(days=days_ahead)
+                    break
+        elif 'next-to-next' in date_text_lower or 'next to next' in date_text_lower or 'after next' in date_text_lower:
+            # Find day of week in the text for next-to-next week
+            for day_name, day_num in day_mappings.items():
+                if day_name in date_text_lower:
+                    current_weekday = now.weekday()
+                    days_ahead = (day_num - current_weekday) % 7 + 14  # Add 14 for next-to-next week
+                    target_date = now + timedelta(days=days_ahead)
+                    break
+        else:
+            # Check for day of week patterns
+            for day_name, day_num in day_mappings.items():
+                if day_name in date_text_lower:
+                    # Check for various modifiers
+                    is_next = 'next' in date_text_lower
+                    is_this = 'this' in date_text_lower
+                    is_before = 'before' in date_text_lower
+                    is_after = 'after' in date_text_lower
+                    is_particular = 'particular' in date_text_lower
+                    is_on_that_day = 'on that day' in date_text_lower
+                    is_after_that = 'after that' in date_text_lower
+
+                    # Calculate target day
+                    current_weekday = now.weekday()
+                    days_ahead = (day_num - current_weekday) % 7
+
+                    if is_next:
+                        days_ahead = (day_num - current_weekday) % 7
+                        if days_ahead == 0:  # If it's the same day, go to next week
+                            days_ahead = 7
+                    elif is_this:
+                        days_ahead = (day_num - current_weekday) % 7
+                        if days_ahead == 0:  # If it's the same day, use today
+                            days_ahead = 0
+                    elif is_before:
+                        # If it's before a day, go to previous week
+                        days_ahead = (day_num - current_weekday) % 7 - 7
+                        if days_ahead >= 0:
+                            days_ahead -= 7
+                    elif is_after or is_particular or is_on_that_day or is_after_that:
+                        # Default behavior for these
+                        if days_ahead == 0 and now.hour >= 18:  # If it's evening, assume next week
+                            days_ahead = 7
+                        elif days_ahead == 0:  # If it's the same day but not evening, use today
+                            days_ahead = 0
+                    else:
+                        # Default behavior: if it's the same day or past, go to next week
+                        if days_ahead == 0 and now.hour >= 18:  # If it's evening, assume next week
+                            days_ahead = 7
+                        elif days_ahead == 0:  # If it's the same day but not evening, use today
+                            days_ahead = 0
+
+                    target_date = now + timedelta(days=days_ahead)
+                    break
+
+        # If we found a target_date, now handle time parsing
+        if 'target_date' in locals():
+            # Check for specific time with day (AM/PM format)
+            time_match = re.search(r'(\d{1,2})(?::(\d{2}))?\s*(am|pm)', date_text_lower)
+            if time_match:
+                hour = int(time_match.group(1))
+                minute = int(time_match.group(2)) if time_match.group(2) else 0
+                period = time_match.group(3)
+
+                if period == 'pm' and hour != 12:
+                    hour += 12
+                elif period == 'am' and hour == 12:
+                    hour = 0
+
+                target_date = target_date.replace(hour=hour, minute=minute, second=0, microsecond=0)
+            else:
+                # Check for 24-hour format time with day (e.g., "Friday at 12:00" or "Next Saturday at 12:00")
+                time_match_24 = re.search(r'at\s+(\d{1,2})(?::(\d{2}))?', date_text_lower)
+                if time_match_24:
+                    hour = int(time_match_24.group(1))
+                    minute = int(time_match_24.group(2)) if time_match_24.group(2) else 0
+
+                    # Convert to 24-hour format if needed
+                    if hour > 23:
+                        hour = hour % 24
+                    if minute > 59:
+                        minute = 59
+
+                    target_date = target_date.replace(hour=hour, minute=minute, second=0, microsecond=0)
+                else:
+                    # Check for time of day expressions with day
+                    if 'morning' in date_text_lower:
+                        target_date = target_date.replace(hour=9, minute=0, second=0, microsecond=0)
+                    elif 'night' in date_text_lower:
+                        target_date = target_date.replace(hour=21, minute=0, second=0, microsecond=0)
+                    else:
+                        # Default to 9 AM for day of week
+                        target_date = target_date.replace(hour=9, minute=0, second=0, microsecond=0)
+
+            print(f"Day of week parsed: {target_date}")
+            return target_date
+
+        # Handle common informal expressions
+        if 'tonight' in date_text_lower:
+            target_date = now.replace(hour=21, minute=0, second=0, microsecond=0)
+            if target_date <= now:
+                target_date += timedelta(days=1)
+            print(f"Tonight parsed: {target_date}")
+            return target_date
+
+        if 'today' in date_text_lower:
+            # Default to 6 PM today
+            target_date = now.replace(hour=18, minute=0, second=0, microsecond=0)
+            if target_date <= now:
+                target_date += timedelta(days=1)
+            print(f"Today parsed: {target_date}")
+            return target_date
+
+        if 'tomorrow' in date_text_lower:
+            target_date = now + timedelta(days=1)
+            # Default to 9 AM tomorrow
+            target_date = target_date.replace(hour=9, minute=0, second=0, microsecond=0)
+            print(f"Tomorrow parsed: {target_date}")
+            return target_date
+
+        if 'day after tomorrow' in date_text_lower:
+            target_date = now + timedelta(days=2)
+            # Default to 9 AM day after tomorrow
+            target_date = target_date.replace(hour=9, minute=0, second=0, microsecond=0)
+            print(f"Day after tomorrow parsed: {target_date}")
+            return target_date
+
+        # Handle specific time patterns (AM/PM)
+        time_match = re.search(r'(\d{1,2})(?::(\d{2}))?\s*(am|pm)', date_text_lower)
+        if time_match:
+            hour = int(time_match.group(1))
+            minute = int(time_match.group(2)) if time_match.group(2) else 0
+            period = time_match.group(3)
+
+            if period == 'pm' and hour != 12:
+                hour += 12
+            elif period == 'am' and hour == 12:
+                hour = 0
+
+            target_time = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+            if target_time <= now:
+                target_time += timedelta(days=1)
+            print(f"Specific time parsed: {target_time}")
+            return target_time
 
         # Time of day expressions
         time_mappings = {
@@ -147,7 +410,8 @@ class DeadlineAgent:
             print(f"Relative time parsed: {future_time}")
             return future_time
 
-        # Handle specific date patterns (e.g., "2nd Oct", "15th Dec")
+        # Handle specific date patterns (e.g., "2nd Oct", "15th Dec", "Oct 2")
+        # Pattern 1: "2nd Oct" format
         date_pattern = re.search(r'(\d{1,2})(?:st|nd|rd|th)?\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)', date_text, re.IGNORECASE)
         if date_pattern:
             day = int(date_pattern.group(1))
@@ -163,9 +427,25 @@ class DeadlineAgent:
                 month = month_map[month_name]
                 year = now.year
 
+                # Check for specific time with date
+                time_match = re.search(r'(\d{1,2})(?::(\d{2}))?\s*(am|pm)', date_text, re.IGNORECASE)
+                if time_match:
+                    hour = int(time_match.group(1))
+                    minute = int(time_match.group(2)) if time_match.group(2) else 0
+                    period = time_match.group(3).lower()
+
+                    if period == 'pm' and hour != 12:
+                        hour += 12
+                    elif period == 'am' and hour == 12:
+                        hour = 0
+                else:
+                    # Default to 6 PM for dates without specific time
+                    hour = 18
+                    minute = 0
+
                 # If the date is in the past this year, assume next year
                 try:
-                    target_date = now.replace(year=year, month=month, day=day, hour=18, minute=0, second=0, microsecond=0)
+                    target_date = now.replace(year=year, month=month, day=day, hour=hour, minute=minute, second=0, microsecond=0)
                     if target_date <= now:
                         target_date = target_date.replace(year=year + 1)
                     print(f"Specific date parsed: {target_date}")
@@ -174,11 +454,133 @@ class DeadlineAgent:
                     # Invalid date (e.g., Feb 30th)
                     pass
 
-        # Use dateparser for absolute dates
+        # Pattern 2: "Oct 2" format (only if no time is specified)
+        short_date_pattern = re.search(r'(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\s+(\d{1,2})(?:\s|$)', date_text, re.IGNORECASE)
+        if short_date_pattern and not re.search(r'at\s+\d{1,2}(?::\d{2})?', date_text):
+            month_name = short_date_pattern.group(1).lower()
+            day = int(short_date_pattern.group(2))
+
+            # Map month names to numbers
+            month_map = {
+                'jan': 1, 'feb': 2, 'mar': 3, 'apr': 4, 'may': 5, 'jun': 6,
+                'jul': 7, 'aug': 8, 'sep': 9, 'oct': 10, 'nov': 11, 'dec': 12
+            }
+
+            if month_name in month_map:
+                month = month_map[month_name]
+                year = now.year
+
+                # Default to 6 PM for dates without specific time
+                hour = 18
+                minute = 0
+
+                # If the date is in the past this year, assume next year
+                try:
+                    target_date = now.replace(year=year, month=month, day=day, hour=hour, minute=minute, second=0, microsecond=0)
+                    if target_date <= now:
+                        target_date = target_date.replace(year=year + 1)
+                    print(f"Short date format parsed: {target_date}")
+                    return target_date
+                except ValueError:
+                    # Invalid date (e.g., Feb 30th)
+                    pass
+
+        # Pattern 3: "Oct 2 at 10:48" format (without AM/PM)
+        short_date_time_pattern = re.search(r'(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\s+(\d{1,2})\s+at\s+(\d{1,2})(?::(\d{2}))?', date_text, re.IGNORECASE)
+        if short_date_time_pattern:
+            month_name = short_date_time_pattern.group(1).lower()
+            day = int(short_date_time_pattern.group(2))
+            hour = int(short_date_time_pattern.group(3))
+            minute = int(short_date_time_pattern.group(4)) if short_date_time_pattern.group(4) else 0
+
+            # Map month names to numbers
+            month_map = {
+                'jan': 1, 'feb': 2, 'mar': 3, 'apr': 4, 'may': 5, 'jun': 6,
+                'jul': 7, 'aug': 8, 'sep': 9, 'oct': 10, 'nov': 11, 'dec': 12
+            }
+
+            if month_name in month_map:
+                month = month_map[month_name]
+                year = now.year
+
+                # If the date is in the past this year, assume next year
+                # But if it's the same day and time has passed, assume tomorrow
+                try:
+                    target_date = now.replace(year=year, month=month, day=day, hour=hour, minute=minute, second=0, microsecond=0)
+                    if target_date <= now:
+                        # If it's the same day but time has passed, schedule for tomorrow
+                        if target_date.date() == now.date():
+                            target_date = target_date + timedelta(days=1)
+                        else:
+                            # If it's a different day, schedule for next year
+                            target_date = target_date.replace(year=year + 1)
+                    print(f"Short date with time parsed: {target_date}")
+                    return target_date
+                except ValueError:
+                    # Invalid date (e.g., Feb 30th)
+                    pass
+
+        # Pattern 4: Full date+time combinations (e.g., "2nd October 2025 10:47 AM")
+        full_date_time_pattern = re.search(r'(\d{1,2})(?:st|nd|rd|th)?\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\s+(\d{4})?\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)', date_text, re.IGNORECASE)
+        if full_date_time_pattern:
+            day = int(full_date_time_pattern.group(1))
+            month_name = full_date_time_pattern.group(2).lower()
+            year = int(full_date_time_pattern.group(3)) if full_date_time_pattern.group(3) else now.year
+            hour = int(full_date_time_pattern.group(4))
+            minute = int(full_date_time_pattern.group(5)) if full_date_time_pattern.group(5) else 0
+            period = full_date_time_pattern.group(6).lower()
+
+            # Map month names to numbers
+            month_map = {
+                'jan': 1, 'feb': 2, 'mar': 3, 'apr': 4, 'may': 5, 'jun': 6,
+                'jul': 7, 'aug': 8, 'sep': 9, 'oct': 10, 'nov': 11, 'dec': 12
+            }
+
+            if month_name in month_map:
+                month = month_map[month_name]
+
+                # Convert to 24-hour format
+                if period == 'pm' and hour != 12:
+                    hour += 12
+                elif period == 'am' and hour == 12:
+                    hour = 0
+
+                try:
+                    target_date = now.replace(year=year, month=month, day=day, hour=hour, minute=minute, second=0, microsecond=0)
+                    if target_date <= now:
+                        target_date = target_date.replace(year=year + 1)
+                    print(f"Full date+time parsed: {target_date}")
+                    return target_date
+                except ValueError:
+                    # Invalid date (e.g., Feb 30th)
+                    pass
+
+        # Pattern 5: Handle the case where the pattern matches but parsing fails
+        # This is a fallback to use dateparser for complex patterns
+        if any(keyword in date_text_lower for keyword in ['october', 'january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september', 'november', 'december']):
+            # Use dateparser for full month names with time
+            parsed_date = dateparser.parse(date_text, settings={
+                'TIMEZONE': str(self.timezone),
+                'RETURN_AS_TIMEZONE_AWARE': True,
+                'PREFER_DATES_FROM': 'future',
+                'RELATIVE_BASE': now
+            })
+
+            if parsed_date:
+                if parsed_date.tzinfo is None:
+                    parsed_date = self.timezone.localize(parsed_date)
+
+                now = datetime.now(self.timezone)
+                if parsed_date > now:
+                    print(f"Dateparser fallback parsed: {parsed_date}")
+                    return parsed_date
+
+        # Use dateparser for absolute dates and complex patterns
         parsed_date = dateparser.parse(date_text, settings={
             'TIMEZONE': str(self.timezone),
             'RETURN_AS_TIMEZONE_AWARE': True,
-            'PREFER_DATES_FROM': 'future'
+            'PREFER_DATES_FROM': 'future',
+            'RELATIVE_BASE': now
         })
 
         if parsed_date:
@@ -226,7 +628,7 @@ class DeadlineAgent:
         # Store reminder
         self.reminders[reminder_id] = reminder
 
-        print(f"✅ Reminder created: {deadline_text} -> {due_at}")
+        print(f"Reminder created: {deadline_text} -> {due_at}")
         return reminder
 
     def get_reminder(self, reminder_id: str) -> Optional[Reminder]:
