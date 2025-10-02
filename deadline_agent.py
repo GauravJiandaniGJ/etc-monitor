@@ -28,6 +28,30 @@ class DeadlineAgent:
         # Comprehensive patterns that work with long messages and natural language
         # Order matters - more specific patterns first
         self.deadline_patterns = [
+            # Till expressions with specific dates - highest priority
+            r"till\s+(\d{1,2}(?:st|nd|rd|th)?\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec))\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm|AM|PM))",
+            r"till\s+(\d{1,2}(?:st|nd|rd|th)?\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec))\s+(\d{1,2}(?::\d{2})?)",
+            r"till\s+(\d{1,2}(?:st|nd|rd|th)?\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec))",
+
+            # Standalone times - high priority
+            r"^(\d{1,2}(?::\d{2})?\s*(?:am|pm|AM|PM))$",
+            r"^(\d{1,2}(?::\d{2})?)$",
+
+            # Days with times (most specific first)
+            r"(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm|AM|PM))",
+            r"(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\s+(\d{1,2}(?::\d{2})?)",
+            r"on\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm|AM|PM))",
+            r"on\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\s+(\d{1,2}(?::\d{2})?)",
+            r"on\s+a\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm|AM|PM))",
+            r"on\s+a\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\s+(\d{1,2}(?::\d{2})?)",
+            r"on\s+the\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm|AM|PM))",
+            r"on\s+the\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\s+(\d{1,2}(?::\d{2})?)",
+
+            # Professional expressions - highest priority (most flexible patterns first)
+            r".*?(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\s+at\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm|AM|PM))",
+            r".*?(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\s+at\s+(\d{1,2}(?::\d{2})?)",
+            r".*?(monday|tuesday|wednesday|thursday|friday|saturday|sunday)",
+
             # Specific date with time patterns (most specific first)
             r"(\d{1,2}(?:st|nd|rd|th)?\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\s+\d{4}\s+\d{1,2}(?::\d{2})?\s*(?:am|pm|AM|PM))",
             r"(\d{1,2}(?:st|nd|rd|th)?\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\s+\d{1,2}(?::\d{2})?\s*(?:am|pm|AM|PM))",
@@ -50,8 +74,23 @@ class DeadlineAgent:
             r"(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\s+evening",
             r"(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\s+night",
             r"on\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)",
+            r"on\s+a\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)",
+            r"on\s+the\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)",
+            r"on\s+a\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\s+at\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm|AM|PM))",
+            r"on\s+the\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\s+at\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm|AM|PM))",
+            r"on\s+a\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\s+at\s+(\d{1,2}(?::\d{2})?)",
+            r"on\s+the\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\s+at\s+(\d{1,2}(?::\d{2})?)",
             r"by\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)",
+            r"until\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)",
+            r"until\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\s+at\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm|AM|PM))",
+            r"until\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\s+at\s+(\d{1,2}(?::\d{2})?)",
+            r"till\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm|AM|PM))",
+            r"till\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\s+(\d{1,2}(?::\d{2})?)",
             r"till\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)",
+            r"till\s+(tomorrow|today|tonight)\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm|AM|PM))",
+            r"till\s+(tomorrow|today|tonight)\s+(\d{1,2}(?::\d{2})?)",
+            r"till\s+(\d{1,2}(?:st|nd|rd|th)?\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec))\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm|AM|PM))",
+            r"till\s+(\d{1,2}(?:st|nd|rd|th)?\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec))\s+(\d{1,2}(?::\d{2})?)",
             r"this\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)",
             r"next\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)",
 
@@ -78,11 +117,17 @@ class DeadlineAgent:
             r"(in\s+)?(\d+)\s+(seconds?|secs?|minutes?|mins?|hours?|hrs?|days?|weeks?|months?)\s+(before|after|from\s+now|later)",
             r"(in\s+)?(\d+)\s+(seconds?|secs?|minutes?|mins?|hours?|hrs?|days?|weeks?|months?)\s+(before|after|from\s+now|later)\s+(morning|evening|night)",
 
-            # Common informal expressions
-            r"(tonight|today|tomorrow|day\s+after\s+tomorrow|yesterday)",
+
+            # Time + day expressions (highest priority)
+            r"(\d{1,2}(?::\d{2})?\s*(?:am|pm|AM|PM))\s+(tomorrow|today|tonight)",
+            r"(\d{1,2}(?::\d{2})?)\s+(tomorrow|today|tonight)",
+
+            # Common informal expressions with time (higher priority)
             r"(tonight|today|tomorrow|day\s+after\s+tomorrow|yesterday)\s+at\s+(\d{1,2}(?::\d{2})?)",
             r"(tonight|today|tomorrow|day\s+after\s+tomorrow|yesterday)\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm|AM|PM))",
             r"(tonight|today|tomorrow|day\s+after\s+tomorrow|yesterday)\s+(morning|evening|night|noon|midnight)",
+            # Common informal expressions without time (lower priority)
+            r"(tonight|today|tomorrow|day\s+after\s+tomorrow|yesterday)",
 
             # EOD and time of day variations
             r"(eod|end\s+of\s+day|end\s+of\s+work|close\s+of\s+business|cob)",
@@ -155,26 +200,7 @@ class DeadlineAgent:
                     return message.strip()
 
                 # For patterns with multiple groups, try to get meaningful text
-                if len(match.groups()) > 1:
-                    # Check if this is a "next day at time" pattern
-                    if 'next' in pattern and 'at' in pattern:
-                        return full_match
-                    else:
-                        # Use the first non-empty group
-                        matched_text = None
-                        for group in match.groups():
-                            if group and group.strip():
-                                matched_text = group.strip()
-                                break
-                        if matched_text:
-                            return matched_text
-
-                # For single group patterns, return the group
-                if len(match.groups()) == 1:
-                    matched_text = match.group(1).strip()
-                    return matched_text
-
-                # Fallback to full match
+                # Always return the full match to preserve context
                 return full_match
 
         print("No pattern matched")
@@ -205,6 +231,363 @@ class DeadlineAgent:
             'monday': 0, 'tuesday': 1, 'wednesday': 2, 'thursday': 3,
             'friday': 4, 'saturday': 5, 'sunday': 6
         }
+
+        # Handle time + day expressions first (highest priority)
+        time_day_match = re.search(r'(\d{1,2})(?::(\d{2}))?\s*(am|pm)\s+(tomorrow|today|tonight)', date_text_lower)
+        if time_day_match:
+            hour = int(time_day_match.group(1))
+            minute = int(time_day_match.group(2)) if time_day_match.group(2) else 0
+            period = time_day_match.group(3)
+            day_expr = time_day_match.group(4)
+
+            # Convert to 24-hour format
+            if period == 'pm' and hour != 12:
+                hour += 12
+            elif period == 'am' and hour == 12:
+                hour = 0
+
+            if day_expr == 'tomorrow':
+                target_date = now + timedelta(days=1)
+            elif day_expr == 'today':
+                target_date = now
+            elif day_expr == 'tonight':
+                target_date = now
+
+            target_date = target_date.replace(hour=hour, minute=minute, second=0, microsecond=0)
+            if target_date <= now and day_expr in ['today', 'tonight']:
+                target_date += timedelta(days=1)
+            print(f"Time + day parsed: {target_date}")
+            return target_date
+
+        # Handle time + day expressions without AM/PM
+        time_day_24_match = re.search(r'(\d{1,2})(?::(\d{2}))?\s+(tomorrow|today|tonight)', date_text_lower)
+        if time_day_24_match:
+            hour = int(time_day_24_match.group(1))
+            minute = int(time_day_24_match.group(2)) if time_day_24_match.group(2) else 0
+            day_expr = time_day_24_match.group(3)
+
+            # Apply smart AM/PM inference
+            if hour == 12:
+                hour = 12  # 12 PM
+            elif hour == 0:
+                hour = 0
+            elif 1 <= hour <= 11:
+                if hour in [1, 3, 4, 5]:  # 1, 3-5 AM are very early morning
+                    hour = hour  # Keep as AM
+                else:  # 2, 6-11 are more likely to be PM
+                    hour = hour + 12  # Convert to PM
+            elif 13 <= hour <= 23:
+                pass  # Keep as is
+            else:
+                hour = 9
+
+            if day_expr == 'tomorrow':
+                target_date = now + timedelta(days=1)
+            elif day_expr == 'today':
+                target_date = now
+            elif day_expr == 'tonight':
+                target_date = now
+
+            target_date = target_date.replace(hour=hour, minute=minute, second=0, microsecond=0)
+            if target_date <= now and day_expr in ['today', 'tonight']:
+                target_date += timedelta(days=1)
+            print(f"Time + day 24h parsed: {target_date}")
+            return target_date
+
+        # Handle standalone times first (highest priority)
+        standalone_time_match = re.search(r'^(\d{1,2})(?::(\d{2}))?\s*(am|pm)$', date_text_lower)
+        if standalone_time_match:
+            hour = int(standalone_time_match.group(1))
+            minute = int(standalone_time_match.group(2)) if standalone_time_match.group(2) else 0
+            period = standalone_time_match.group(3)
+
+            # Convert to 24-hour format
+            if period == 'pm' and hour != 12:
+                hour += 12
+            elif period == 'am' and hour == 12:
+                hour = 0
+
+            target_time = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+            if target_time <= now:
+                target_time += timedelta(days=1)
+            print(f"Standalone time parsed: {target_time}")
+            return target_time
+
+        # Handle standalone times without AM/PM
+        standalone_time_24_match = re.search(r'^(\d{1,2})(?::(\d{2}))?$', date_text_lower)
+        if standalone_time_24_match:
+            hour = int(standalone_time_24_match.group(1))
+            minute = int(standalone_time_24_match.group(2)) if standalone_time_24_match.group(2) else 0
+
+            # Apply smart AM/PM inference
+            if hour == 12:
+                hour = 12  # 12 PM
+            elif hour == 0:
+                hour = 0
+            elif 1 <= hour <= 11:
+                if hour in [1, 3, 4, 5]:  # 1, 3-5 AM are very early morning
+                    hour = hour  # Keep as AM
+                else:  # 2, 6-11 are more likely to be PM
+                    hour = hour + 12  # Convert to PM
+            elif 13 <= hour <= 23:
+                pass  # Keep as is
+            else:
+                hour = 9
+
+            target_time = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+            if target_time <= now:
+                target_time += timedelta(days=1)
+            print(f"Standalone time 24h parsed: {target_time}")
+            return target_time
+
+        # Handle days with times (e.g., "friday 2pm", "monday 9am")
+        day_time_match = re.search(r'(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)', date_text_lower)
+        if day_time_match:
+            day_name = day_time_match.group(1)
+            hour = int(day_time_match.group(2))
+            minute = int(day_time_match.group(3)) if day_time_match.group(3) else 0
+            period = day_time_match.group(4)
+
+            # Convert to 24-hour format
+            if period == 'pm' and hour != 12:
+                hour += 12
+            elif period == 'am' and hour == 12:
+                hour = 0
+
+            # Calculate target date
+            day_mappings = {
+                'monday': 0, 'tuesday': 1, 'wednesday': 2, 'thursday': 3,
+                'friday': 4, 'saturday': 5, 'sunday': 6
+            }
+            target_day = day_mappings[day_name]
+            current_day = now.weekday()
+            days_ahead = target_day - current_day
+            if days_ahead <= 0:  # Target day already passed this week
+                days_ahead += 7
+            target_date = now + timedelta(days=days_ahead)
+            target_date = target_date.replace(hour=hour, minute=minute, second=0, microsecond=0)
+            print(f"Day with time parsed: {target_date}")
+            return target_date
+
+        # Handle days with times without AM/PM (e.g., "friday 2", "monday 9")
+        day_time_24_match = re.search(r'(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\s+(\d{1,2})(?::(\d{2}))?', date_text_lower)
+        if day_time_24_match:
+            day_name = day_time_24_match.group(1)
+            hour = int(day_time_24_match.group(2))
+            minute = int(day_time_24_match.group(3)) if day_time_24_match.group(3) else 0
+
+            # Apply smart AM/PM inference
+            if hour == 12:
+                hour = 12  # 12 PM
+            elif hour == 0:
+                hour = 0
+            elif 1 <= hour <= 11:
+                if hour in [1, 3, 4, 5]:  # 1, 3-5 AM are very early morning
+                    hour = hour  # Keep as AM
+                else:  # 2, 6-11 are more likely to be PM
+                    hour = hour + 12  # Convert to PM
+            elif 13 <= hour <= 23:
+                pass  # Keep as is
+            else:
+                hour = 9
+
+            # Calculate target date
+            day_mappings = {
+                'monday': 0, 'tuesday': 1, 'wednesday': 2, 'thursday': 3,
+                'friday': 4, 'saturday': 5, 'sunday': 6
+            }
+            target_day = day_mappings[day_name]
+            current_day = now.weekday()
+            days_ahead = target_day - current_day
+            if days_ahead <= 0:  # Target day already passed this week
+                days_ahead += 7
+            target_date = now + timedelta(days=days_ahead)
+            target_date = target_date.replace(hour=hour, minute=minute, second=0, microsecond=0)
+            print(f"Day with time 24h parsed: {target_date}")
+            return target_date
+
+        # Handle "till" expressions with specific dates first (most specific)
+        till_date_match = re.search(r'till\s+(\d{1,2})(?:st|nd|rd|th)?\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)', date_text_lower)
+        if till_date_match:
+            day = int(till_date_match.group(1))
+            month_name = till_date_match.group(2)
+            hour = int(till_date_match.group(3))
+            minute = int(till_date_match.group(4)) if till_date_match.group(4) else 0
+            period = till_date_match.group(5)
+
+            month_mapping = {
+                'jan': 1, 'feb': 2, 'mar': 3, 'apr': 4, 'may': 5, 'jun': 6,
+                'jul': 7, 'aug': 8, 'sep': 9, 'oct': 10, 'nov': 11, 'dec': 12
+            }
+            month = month_mapping[month_name]
+
+            # Convert to 24-hour format
+            if period == 'pm' and hour != 12:
+                hour += 12
+            elif period == 'am' and hour == 12:
+                hour = 0
+
+            # Use current year, or next year if date has passed
+            year = now.year
+            target_date = now.replace(year=year, month=month, day=day, hour=hour, minute=minute, second=0, microsecond=0)
+            # Only go to next year if the date has completely passed (not just the time)
+            if target_date.date() < now.date():
+                target_date = target_date.replace(year=year + 1)
+
+            print(f"Till specific date parsed: {target_date}")
+            return target_date
+
+        # Handle "till" expressions with specific dates without AM/PM
+        till_date_match_24 = re.search(r'till\s+(\d{1,2})(?:st|nd|rd|th)?\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\s+(\d{1,2})(?::(\d{2}))?', date_text_lower)
+        if till_date_match_24:
+            day = int(till_date_match_24.group(1))
+            month_name = till_date_match_24.group(2)
+            hour = int(till_date_match_24.group(3))
+            minute = int(till_date_match_24.group(4)) if till_date_match_24.group(4) else 0
+
+            month_mapping = {
+                'jan': 1, 'feb': 2, 'mar': 3, 'apr': 4, 'may': 5, 'jun': 6,
+                'jul': 7, 'aug': 8, 'sep': 9, 'oct': 10, 'nov': 11, 'dec': 12
+            }
+            month = month_mapping[month_name]
+
+            # Apply smart AM/PM inference
+            if hour == 12:
+                hour = 12  # 12 PM
+            elif hour == 0:
+                hour = 0
+            elif 1 <= hour <= 11:
+                if hour in [1, 3, 4, 5]:  # 1, 3-5 AM are very early morning
+                    hour = hour  # Keep as AM
+                else:  # 2, 6-11 are more likely to be PM
+                    hour = hour + 12  # Convert to PM
+            elif 13 <= hour <= 23:
+                pass  # Keep as is
+            else:
+                hour = 9
+
+            # Use current year, or next year if date has passed
+            year = now.year
+            target_date = now.replace(year=year, month=month, day=day, hour=hour, minute=minute, second=0, microsecond=0)
+            # Only go to next year if the date has completely passed (not just the time)
+            if target_date.date() < now.date():
+                target_date = target_date.replace(year=year + 1)
+
+            print(f"Till specific date parsed: {target_date}")
+            return target_date
+
+        # Handle "till" expressions first (most specific)
+        if 'till' in date_text_lower:
+            # Handle "till tomorrow 5 am" or "till tomorrow 5"
+            if 'tomorrow' in date_text_lower:
+                target_date = now + timedelta(days=1)
+                # Extract time from the text
+                time_match = re.search(r'(\d{1,2})(?::(\d{2}))?\s*(am|pm)', date_text_lower)
+                if time_match:
+                    hour = int(time_match.group(1))
+                    minute = int(time_match.group(2)) if time_match.group(2) else 0
+                    period = time_match.group(3)
+
+                    if period == 'pm' and hour != 12:
+                        hour += 12
+                    elif period == 'am' and hour == 12:
+                        hour = 0
+
+                    target_date = target_date.replace(hour=hour, minute=minute, second=0, microsecond=0)
+                else:
+                    # Check for time without AM/PM
+                    time_match_24 = re.search(r'(\d{1,2})(?::(\d{2}))?', date_text_lower)
+                    if time_match_24:
+                        hour = int(time_match_24.group(1))
+                        minute = int(time_match_24.group(2)) if time_match_24.group(2) else 0
+                        target_date = target_date.replace(hour=hour, minute=minute, second=0, microsecond=0)
+                    else:
+                        # Default to 9 AM for tomorrow
+                        target_date = target_date.replace(hour=9, minute=0, second=0, microsecond=0)
+
+                print(f"Till tomorrow parsed: {target_date}")
+                return target_date
+
+            # Handle "till friday" or "till saturday 2 pm"
+            for day_name, day_num in day_mappings.items():
+                if day_name in date_text_lower:
+                    current_weekday = now.weekday()
+                    days_ahead = (day_num - current_weekday) % 7
+                    if days_ahead == 0:  # If it's the same day, use today
+                        days_ahead = 0
+                    target_date = now + timedelta(days=days_ahead)
+
+                    # Extract time from the text
+                    time_match = re.search(r'(\d{1,2})(?::(\d{2}))?\s*(am|pm)', date_text_lower)
+                    if time_match:
+                        hour = int(time_match.group(1))
+                        minute = int(time_match.group(2)) if time_match.group(2) else 0
+                        period = time_match.group(3)
+
+                        if period == 'pm' and hour != 12:
+                            hour += 12
+                        elif period == 'am' and hour == 12:
+                            hour = 0
+
+                        target_date = target_date.replace(hour=hour, minute=minute, second=0, microsecond=0)
+                    else:
+                        # Check for time without AM/PM
+                        time_match_24 = re.search(r'(\d{1,2})(?::(\d{2}))?', date_text_lower)
+                        if time_match_24:
+                            hour = int(time_match_24.group(1))
+                            minute = int(time_match_24.group(2)) if time_match_24.group(2) else 0
+                            target_date = target_date.replace(hour=hour, minute=minute, second=0, microsecond=0)
+                        else:
+                            # Default to 9 AM for day
+                            target_date = target_date.replace(hour=9, minute=0, second=0, microsecond=0)
+
+                    print(f"Till {day_name} parsed: {target_date}")
+                    return target_date
+
+            # Handle "till 4th Oct 5 pm" or "till 4th Oct 5"
+            date_match = re.search(r'(\d{1,2})(?:st|nd|rd|th)?\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)', date_text_lower)
+            if date_match:
+                day = int(date_match.group(1))
+                month_name = date_match.group(2)
+                month_mapping = {
+                    'jan': 1, 'feb': 2, 'mar': 3, 'apr': 4, 'may': 5, 'jun': 6,
+                    'jul': 7, 'aug': 8, 'sep': 9, 'oct': 10, 'nov': 11, 'dec': 12
+                }
+                month = month_mapping[month_name]
+
+                # Use current year, or next year if date has passed
+                year = now.year
+                target_date = now.replace(month=month, day=day, hour=0, minute=0, second=0, microsecond=0)
+                # Only go to next year if the date has completely passed (not just the time)
+                if target_date.date() < now.date():
+                    target_date = target_date.replace(year=year + 1)
+
+                # Extract time from the text
+                time_match = re.search(r'(\d{1,2})(?::(\d{2}))?\s*(am|pm)', date_text_lower)
+                if time_match:
+                    hour = int(time_match.group(1))
+                    minute = int(time_match.group(2)) if time_match.group(2) else 0
+                    period = time_match.group(3)
+
+                    if period == 'pm' and hour != 12:
+                        hour += 12
+                    elif period == 'am' and hour == 12:
+                        hour = 0
+
+                    target_date = target_date.replace(hour=hour, minute=minute, second=0, microsecond=0)
+                else:
+                    # Check for time without AM/PM
+                    time_match_24 = re.search(r'(\d{1,2})(?::(\d{2}))?', date_text_lower)
+                    if time_match_24:
+                        hour = int(time_match_24.group(1))
+                        minute = int(time_match_24.group(2)) if time_match_24.group(2) else 0
+                        target_date = target_date.replace(hour=hour, minute=minute, second=0, microsecond=0)
+                    else:
+                        # Default to 6 PM for specific dates
+                        target_date = target_date.replace(hour=18, minute=0, second=0, microsecond=0)
+
+                print(f"Till {day} {month_name} parsed: {target_date}")
+                return target_date
 
         # Handle week expressions first
         if 'this week' in date_text_lower or 'coming week' in date_text_lower:
@@ -295,11 +678,33 @@ class DeadlineAgent:
 
                 target_date = target_date.replace(hour=hour, minute=minute, second=0, microsecond=0)
             else:
-                # Check for 24-hour format time with day (e.g., "Friday at 12:00" or "Next Saturday at 12:00")
+                # Check for time without AM/PM (e.g., "Friday at 12:00" or "Saturday at 2:00")
                 time_match_24 = re.search(r'at\s+(\d{1,2})(?::(\d{2}))?', date_text_lower)
                 if time_match_24:
                     hour = int(time_match_24.group(1))
                     minute = int(time_match_24.group(2)) if time_match_24.group(2) else 0
+
+                    # Smart AM/PM inference
+                    if hour == 12:
+                        # 12:00 is ambiguous, default to PM for most cases
+                        hour = 12  # 12 PM
+                    elif hour == 0:
+                        # 0:00 should be 12 AM
+                        hour = 0
+                    elif 1 <= hour <= 11:
+                        # 1-11 could be AM or PM, use smart inference
+                        current_hour = now.hour
+                        if hour in [1, 3, 4, 5]:  # 1, 3-5 AM are very early morning
+                            hour = hour  # Keep as AM
+                        else:  # 2, 6-11 are more likely to be PM
+                            # For common afternoon times like 2:00, 3:00, etc., default to PM
+                            hour = hour + 12  # Convert to PM
+                    elif 13 <= hour <= 23:
+                        # 13-23 are clearly 24-hour format
+                        pass  # Keep as is
+                    else:
+                        # Invalid hour, default to 9 AM
+                        hour = 9
 
                     # Convert to 24-hour format if needed
                     if hour > 23:
@@ -321,6 +726,81 @@ class DeadlineAgent:
             print(f"Day of week parsed: {target_date}")
             return target_date
 
+        # Handle professional expressions with flexible patterns
+        # Check for any day of week in the text (for professional expressions)
+        day_mappings = {
+            'monday': 0, 'tuesday': 1, 'wednesday': 2, 'thursday': 3,
+            'friday': 4, 'saturday': 5, 'sunday': 6
+        }
+
+        for day_name, day_num in day_mappings.items():
+            if day_name in date_text_lower:
+                # Check for time with day (AM/PM format)
+                time_match = re.search(r'(\d{1,2})(?::(\d{2}))?\s*(am|pm)', date_text_lower)
+                if time_match:
+                    hour = int(time_match.group(1))
+                    minute = int(time_match.group(2)) if time_match.group(2) else 0
+                    period = time_match.group(3)
+
+                    if period == 'pm' and hour != 12:
+                        hour += 12
+                    elif period == 'am' and hour == 12:
+                        hour = 0
+
+                    # Calculate target day
+                    current_weekday = now.weekday()
+                    days_ahead = (day_num - current_weekday) % 7
+                    if days_ahead == 0:  # If it's the same day, use today
+                        days_ahead = 0
+                    target_date = now + timedelta(days=days_ahead)
+                    target_date = target_date.replace(hour=hour, minute=minute, second=0, microsecond=0)
+
+                    print(f"Professional expression parsed: {target_date}")
+                    return target_date
+
+                # Check for time without AM/PM
+                time_match_24 = re.search(r'at\s+(\d{1,2})(?::(\d{2}))?', date_text_lower)
+                if time_match_24:
+                    hour = int(time_match_24.group(1))
+                    minute = int(time_match_24.group(2)) if time_match_24.group(2) else 0
+
+                    # Apply smart AM/PM inference
+                    if hour == 12:
+                        hour = 12  # 12 PM
+                    elif hour == 0:
+                        hour = 0
+                    elif 1 <= hour <= 11:
+                        if hour in [1, 3, 4, 5]:  # 1, 3-5 AM are very early morning
+                            hour = hour  # Keep as AM
+                        else:  # 2, 6-11 are more likely to be PM
+                            hour = hour + 12  # Convert to PM
+                    elif 13 <= hour <= 23:
+                        pass  # Keep as is
+                    else:
+                        hour = 9
+
+                    # Calculate target day
+                    current_weekday = now.weekday()
+                    days_ahead = (day_num - current_weekday) % 7
+                    if days_ahead == 0:  # If it's the same day, use today
+                        days_ahead = 0
+                    target_date = now + timedelta(days=days_ahead)
+                    target_date = target_date.replace(hour=hour, minute=minute, second=0, microsecond=0)
+
+                    print(f"Professional expression parsed: {target_date}")
+                    return target_date
+
+                # No specific time, use default
+                current_weekday = now.weekday()
+                days_ahead = (day_num - current_weekday) % 7
+                if days_ahead == 0:  # If it's the same day, use today
+                    days_ahead = 0
+                target_date = now + timedelta(days=days_ahead)
+                target_date = target_date.replace(hour=9, minute=0, second=0, microsecond=0)
+
+                print(f"Professional expression parsed: {target_date}")
+                return target_date
+
         # Handle common informal expressions
         if 'tonight' in date_text_lower:
             target_date = now.replace(hour=21, minute=0, second=0, microsecond=0)
@@ -330,17 +810,87 @@ class DeadlineAgent:
             return target_date
 
         if 'today' in date_text_lower:
-            # Default to 6 PM today
-            target_date = now.replace(hour=18, minute=0, second=0, microsecond=0)
-            if target_date <= now:
-                target_date += timedelta(days=1)
+            target_date = now
+
+            # Extract time from the text if present
+            time_match = re.search(r'(\d{1,2})(?::(\d{2}))?\s*(am|pm)', date_text_lower)
+            if time_match:
+                hour = int(time_match.group(1))
+                minute = int(time_match.group(2)) if time_match.group(2) else 0
+                period = time_match.group(3)
+
+                # Convert to 24-hour format
+                if period == 'pm' and hour != 12:
+                    hour += 12
+                elif period == 'am' and hour == 12:
+                    hour = 0
+
+                target_date = target_date.replace(hour=hour, minute=minute, second=0, microsecond=0)
+                if target_date <= now:
+                    target_date += timedelta(days=1)
+            else:
+                # Check for time without AM/PM
+                time_match_24 = re.search(r'(\d{1,2})(?::(\d{2}))?', date_text_lower)
+                if time_match_24:
+                    hour = int(time_match_24.group(1))
+                    minute = int(time_match_24.group(2)) if time_match_24.group(2) else 0
+                    target_date = target_date.replace(hour=hour, minute=minute, second=0, microsecond=0)
+                    if target_date <= now:
+                        target_date += timedelta(days=1)
+                else:
+                    # Default to 6 PM today
+                    target_date = target_date.replace(hour=18, minute=0, second=0, microsecond=0)
+                    if target_date <= now:
+                        target_date += timedelta(days=1)
+
             print(f"Today parsed: {target_date}")
             return target_date
 
         if 'tomorrow' in date_text_lower:
             target_date = now + timedelta(days=1)
-            # Default to 9 AM tomorrow
-            target_date = target_date.replace(hour=9, minute=0, second=0, microsecond=0)
+
+            # Check for time of day expressions first
+            time_mappings = {
+                'morning': 9,
+                'noon': 12,
+                'evening': 18,
+                'night': 21,
+                'midnight': 0
+            }
+
+            time_found = False
+            for time_expr, hour in time_mappings.items():
+                if time_expr in date_text_lower:
+                    target_date = target_date.replace(hour=hour, minute=0, second=0, microsecond=0)
+                    time_found = True
+                    break
+
+            if not time_found:
+                # Extract time from the text if present
+                time_match = re.search(r'(\d{1,2})(?::(\d{2}))?\s*(am|pm)', date_text_lower)
+                if time_match:
+                    hour = int(time_match.group(1))
+                    minute = int(time_match.group(2)) if time_match.group(2) else 0
+                    period = time_match.group(3)
+
+                    # Convert to 24-hour format
+                    if period == 'pm' and hour != 12:
+                        hour += 12
+                    elif period == 'am' and hour == 12:
+                        hour = 0
+
+                    target_date = target_date.replace(hour=hour, minute=minute, second=0, microsecond=0)
+                else:
+                    # Check for time without AM/PM
+                    time_match_24 = re.search(r'(\d{1,2})(?::(\d{2}))?', date_text_lower)
+                    if time_match_24:
+                        hour = int(time_match_24.group(1))
+                        minute = int(time_match_24.group(2)) if time_match_24.group(2) else 0
+                        target_date = target_date.replace(hour=hour, minute=minute, second=0, microsecond=0)
+                    else:
+                        # Default to 9 AM tomorrow
+                        target_date = target_date.replace(hour=9, minute=0, second=0, microsecond=0)
+
             print(f"Tomorrow parsed: {target_date}")
             return target_date
 
@@ -492,6 +1042,26 @@ class DeadlineAgent:
             day = int(short_date_time_pattern.group(2))
             hour = int(short_date_time_pattern.group(3))
             minute = int(short_date_time_pattern.group(4)) if short_date_time_pattern.group(4) else 0
+
+            # Apply smart AM/PM inference
+            if hour == 12:
+                # 12:00 is ambiguous, default to PM for most cases
+                hour = 12  # 12 PM
+            elif hour == 0:
+                # 0:00 should be 12 AM
+                hour = 0
+            elif 1 <= hour <= 11:
+                # 1-11 could be AM or PM, use smart inference
+                if hour in [1, 3, 4, 5]:  # 1, 3-5 AM are very early morning
+                    hour = hour  # Keep as AM
+                else:  # 2, 6-11 are more likely to be PM
+                    hour = hour + 12  # Convert to PM
+            elif 13 <= hour <= 23:
+                # 13-23 are clearly 24-hour format
+                pass  # Keep as is
+            else:
+                # Invalid hour, default to 9 AM
+                hour = 9
 
             # Map month names to numbers
             month_map = {

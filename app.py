@@ -124,9 +124,21 @@ def handle_message_events(body, event, say, logger):
                         if deadline_date == current_date:
                             deadline_str = local_time.strftime('%I:%M %p')
                         elif deadline_date == current_date + timedelta(days=1):
-                            deadline_str = f"tomorrow at {local_time.strftime('%I:%M %p')}"
+                            # Check if user said "tomorrow" or a specific day
+                            if 'tomorrow' in text.lower():
+                                deadline_str = f"tomorrow at {local_time.strftime('%I:%M %p')}"
+                            else:
+                                # Check if it's a specific day of week (like "till friday")
+                                day_name = local_time.strftime('%A')
+                                deadline_str = f"{day_name} at {local_time.strftime('%I:%M %p')}"
                         else:
-                            deadline_str = local_time.strftime('%b %d at %I:%M %p')
+                            # For future dates, show day name only if it's within a week
+                            days_diff = (deadline_date - current_date).days
+                            if days_diff <= 7:
+                                day_name = local_time.strftime('%A')
+                                deadline_str = f"{day_name} at {local_time.strftime('%I:%M %p')}"
+                            else:
+                                deadline_str = local_time.strftime('%b %d at %I:%M %p')
 
                         # Send confirmation
                         if is_update:
@@ -224,9 +236,21 @@ def handle_message_events(body, event, say, logger):
             if deadline_date == current_date:
                 deadline_str = local_time.strftime('%I:%M %p')
             elif deadline_date == current_date + timedelta(days=1):
-                deadline_str = f"tomorrow at {local_time.strftime('%I:%M %p')}"
+                # Check if user said "tomorrow" or a specific day
+                if 'tomorrow' in text.lower():
+                    deadline_str = f"tomorrow at {local_time.strftime('%I:%M %p')}"
+                else:
+                    # Check if it's a specific day of week (like "till friday")
+                    day_name = local_time.strftime('%A')
+                    deadline_str = f"{day_name} at {local_time.strftime('%I:%M %p')}"
             else:
-                deadline_str = local_time.strftime('%b %d at %I:%M %p')
+                # For future dates, show day name only if it's within a week
+                days_diff = (deadline_date - current_date).days
+                if days_diff <= 7:
+                    day_name = local_time.strftime('%A')
+                    deadline_str = f"{day_name} at {local_time.strftime('%I:%M %p')}"
+                else:
+                    deadline_str = local_time.strftime('%b %d at %I:%M %p')
 
             print(f"Display time: {deadline_str}")
 
