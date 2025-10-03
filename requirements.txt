@@ -5,3 +5,4 @@ apscheduler==3.10.4
 dateparser==1.2.0
 sqlalchemy==2.0.23
 pytz==2023.3
+flask==3.0.0

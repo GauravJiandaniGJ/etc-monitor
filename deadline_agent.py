@@ -1,8 +1,10 @@
 import re
 import uuid
-from dataclasses import dataclass
+import sqlite3
+import json
+from dataclasses import dataclass, asdict
 from datetime import datetime, timedelta
-from typing import Optional, Dict
+from typing import Optional, Dict, List
 import pytz
 import dateparser
 
@@ -12,18 +14,41 @@ class Reminder:
     """Data structure for storing deadline reminders"""
     id: str
     user_id: str
-    message_text: str
-    matched_text: str
-    due_at: datetime
-    created_at: datetime
+    channel_id: str
+    message_ts: str
+    thread_ts: Optional[str] = None
+    original_text: str = ""
+    matched_text: str = ""
+    due_at: Optional[datetime] = None
+    created_at: Optional[datetime] = None
 
 
 class DeadlineAgent:
     """AI agent that detects deadlines in user messages and triggers reminders"""
 
-    def __init__(self, timezone: str = 'UTC'):
+    def __init__(self, timezone: str = 'UTC', db_path: str = 'reminders.db'):
         self.timezone = pytz.timezone(timezone)
+        self.db_path = db_path
         self.reminders: Dict[str, Reminder] = {}
+        self.user_history: Dict[str, List[Dict]] = {}  # Track user's last ETC for context
+        self._init_database()
+        self._load_reminders_from_db()
+
+        # Contextual patterns for professional intelligence - highest priority
+        self.contextual_patterns = [
+            # Repeat/Again patterns
+            r"^(again|repeat|same|re-schedule|reschedule|do\s+it\s+again|once\s+more|one\s+more\s+time)$",
+            r"^(again|repeat|same|re-schedule|reschedule|do\s+it\s+again|once\s+more|one\s+more\s+time)\s+(for|in|at|on)\s+(.+)$",
+            r"^(again|repeat|same|re-schedule|reschedule|do\s+it\s+again|once\s+more|one\s+more\s+time)\s+(.+)$",
+
+            # Professional expressions
+            r"^(schedule|set|create|add|make)\s+(another|one\s+more|additional)\s+(etc|reminder|deadline|meeting|call|task)$",
+            r"^(schedule|set|create|add|make)\s+(another|one\s+more|additional)\s+(etc|reminder|deadline|meeting|call|task)\s+(for|in|at|on)\s+(.+)$",
+
+            # Time-based repeats
+            r"^(every|each|recurring|recur)\s+(.+)$",
+            r"^(every|each|recurring|recur)\s+(.+)\s+(for|in|at|on)\s+(.+)$",
+        ]
 
         # Comprehensive patterns that work with long messages and natural language
         # Order matters - more specific patterns first
@@ -51,6 +76,13 @@ class DeadlineAgent:
             r".*?(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\s+at\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm|AM|PM))",
             r".*?(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\s+at\s+(\d{1,2}(?::\d{2})?)",
             r".*?(monday|tuesday|wednesday|thursday|friday|saturday|sunday)",
+
+            # Advanced professional expressions
+            r"(schedule|set|create|add|make)\s+(meeting|call|task|reminder|etc|deadline)\s+(for|in|at|on)\s+(.+)$",
+            r"(need|want|require|must)\s+(meeting|call|task|reminder|etc|deadline)\s+(for|in|at|on)\s+(.+)$",
+            r"(remind|notify|alert)\s+(me|us)\s+(for|in|at|on)\s+(.+)$",
+            r"(follow\s+up|followup|follow-up)\s+(meeting|call|task|reminder)\s+(for|in|at|on)\s+(.+)$",
+            r"(book|arrange|organize)\s+(meeting|call|task|reminder|etc|deadline)\s+(for|in|at|on)\s+(.+)$",
 
             # Specific date with time patterns (most specific first)
             r"(\d{1,2}(?:st|nd|rd|th)?\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\s+\d{4}\s+\d{1,2}(?::\d{2})?\s*(?:am|pm|AM|PM))",
@@ -205,6 +237,40 @@ class DeadlineAgent:
 
         print("No pattern matched")
         return None
+
+    def _is_contextual_request(self, message: str) -> bool:
+        """Check if message is a contextual request like 'again', 'same', etc."""
+        message_lower = message.lower().strip()
+
+        contextual_keywords = [
+            'again', 'repeat', 'same', 're-schedule', 'reschedule',
+            'do it again', 'once more', 'one more time', 'another',
+            'schedule another', 'set another', 'create another',
+            'every', 'each', 'recurring', 'recur'
+        ]
+
+        for keyword in contextual_keywords:
+            if keyword in message_lower:
+                return True
+        return False
+
+    def _get_user_last_etc(self, user_id: str) -> Optional[Dict]:
+        """Get user's last ETC for contextual understanding"""
+        if user_id not in self.user_history or not self.user_history[user_id]:
+            return None
+
+        # Get the most recent ETC
+        return self.user_history[user_id][-1]
+
+    def _save_user_etc(self, user_id: str, etc_data: Dict):
+        """Save user's ETC to history for contextual understanding"""
+        if user_id not in self.user_history:
+            self.user_history[user_id] = []
+
+        # Keep only last 5 ETCs per user
+        self.user_history[user_id].append(etc_data)
+        if len(self.user_history[user_id]) > 5:
+            self.user_history[user_id] = self.user_history[user_id][-5:]
 
     def _parse_datetime(self, date_text: str) -> Optional[datetime]:
         """
@@ -1165,21 +1231,42 @@ class DeadlineAgent:
         print("Failed to parse datetime")
         return None
 
-    def handle_message(self, message: str, user_id: str) -> Optional[Reminder]:
+    def handle_message(self, message: str, user_id: str, channel_id: Optional[str] = None, message_ts: Optional[str] = None, thread_ts: Optional[str] = None) -> Optional[Reminder]:
         """
-        Main function to process a message and detect deadlines.
+        Main function to process a message and detect deadlines with contextual understanding.
         Returns a Reminder object if deadline is found, None otherwise.
         """
-        # Detect deadline text
-        deadline_text = self._detect_deadline_text(message)
+        print(f"Processing message: '{message}' from user: {user_id}")
+
+        # Check if this is a contextual request (again, same, repeat, etc.)
+        if self._is_contextual_request(message):
+            print("Contextual request detected - checking user history")
+            last_etc = self._get_user_last_etc(user_id)
+
+            if last_etc:
+                print(f"Found last ETC: {last_etc}")
+                # Use the last ETC's time pattern
+                deadline_text = last_etc.get('matched_text', '')
+                if deadline_text:
+                    print(f"Using contextual deadline: {deadline_text}")
+                else:
+                    print("No contextual deadline found, trying normal detection")
+                    deadline_text = self._detect_deadline_text(message)
+            else:
+                print("No user history found, trying normal detection")
+                deadline_text = self._detect_deadline_text(message)
+        else:
+            # Normal deadline detection
+            deadline_text = self._detect_deadline_text(message)
+
         if not deadline_text:
-            print("No deadline text detected")
+            print("No ETC text detected")
             return None
 
         # Parse the datetime
         due_at = self._parse_datetime(deadline_text)
         if not due_at:
-            print("Failed to parse deadline datetime")
+            print("Failed to parse ETC datetime")
             return None
 
         # Create reminder
@@ -1189,7 +1276,10 @@ class DeadlineAgent:
         reminder = Reminder(
             id=reminder_id,
             user_id=user_id,
-            message_text=message,
+            channel_id=channel_id or 'unknown',
+            message_ts=message_ts or 'unknown',
+            thread_ts=thread_ts,
+            original_text=message,
             matched_text=deadline_text,
             due_at=due_at,
             created_at=created_at
@@ -1198,7 +1288,18 @@ class DeadlineAgent:
         # Store reminder
         self.reminders[reminder_id] = reminder
 
-        print(f"Reminder created: {deadline_text} -> {due_at}")
+        # Persist to database
+        self._save_reminder_to_db(reminder)
+
+        # Save to user history for contextual understanding
+        self._save_user_etc(user_id, {
+            'matched_text': deadline_text,
+            'due_at': due_at.isoformat(),
+            'original_text': message,
+            'created_at': created_at.isoformat()
+        })
+
+        print(f"ETC reminder created: {deadline_text} -> {due_at}")
         return reminder
 
     def get_reminder(self, reminder_id: str) -> Optional[Reminder]:
@@ -1212,6 +1313,173 @@ class DeadlineAgent:
     def remove_reminder(self, reminder_id: str) -> bool:
         """Remove a reminder from storage"""
         if reminder_id in self.reminders:
+            # Mark as inactive in database
+            self._deactivate_reminder_in_db(reminder_id)
+
+            # Remove from memory
             del self.reminders[reminder_id]
             return True
         return False
+
+    def _init_database(self):
+        """Initialize SQLite database for persistent storage"""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+
+            # Create reminders table
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS reminders (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    channel_id TEXT NOT NULL,
+                    message_ts TEXT NOT NULL,
+                    thread_ts TEXT,
+                    due_at TEXT NOT NULL,
+                    original_text TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    is_active INTEGER DEFAULT 1
+                )
+            ''')
+
+            conn.commit()
+            conn.close()
+            print(f"Database initialized: {self.db_path}")
+
+        except Exception as e:
+            print(f"Error initializing database: {e}")
+
+    def _save_reminder_to_db(self, reminder: Reminder):
+        """Save reminder to database"""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+
+            cursor.execute('''
+                INSERT OR REPLACE INTO reminders
+                (id, user_id, channel_id, message_ts, thread_ts, due_at, original_text, created_at, is_active)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                reminder.id,
+                reminder.user_id,
+                reminder.channel_id,
+                reminder.message_ts,
+                reminder.thread_ts,
+                reminder.due_at.isoformat(),
+                reminder.original_text,
+                reminder.created_at.isoformat(),
+                1
+            ))
+
+            conn.commit()
+            conn.close()
+            print(f"ETC reminder saved to database: {reminder.id}")
+
+        except Exception as e:
+            print(f"Error saving reminder to database: {e}")
+
+    def _load_reminders_from_db(self):
+        """Load existing reminders from database"""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+
+            # Load active reminders
+            cursor.execute('''
+                SELECT id, user_id, channel_id, message_ts, thread_ts, due_at, original_text, created_at
+                FROM reminders
+                WHERE is_active = 1 AND due_at > datetime('now')
+                ORDER BY due_at ASC
+            ''')
+
+            rows = cursor.fetchall()
+            loaded_count = 0
+
+            for row in rows:
+                reminder_id, user_id, channel_id, message_ts, thread_ts, due_at_str, original_text, created_at_str = row
+
+                # Parse datetime strings
+                due_at = datetime.fromisoformat(due_at_str)
+                created_at = datetime.fromisoformat(created_at_str)
+
+                # Create reminder object
+                reminder = Reminder(
+                    id=reminder_id,
+                    user_id=user_id,
+                    channel_id=channel_id,
+                    message_ts=message_ts,
+                    thread_ts=thread_ts,
+                    due_at=due_at,
+                    original_text=original_text,
+                    created_at=created_at
+                )
+
+                self.reminders[reminder_id] = reminder
+                loaded_count += 1
+
+            conn.close()
+            print(f"Loaded {loaded_count} active ETC reminders from database")
+
+        except Exception as e:
+            print(f"Error loading reminders from database: {e}")
+
+    def _deactivate_reminder_in_db(self, reminder_id: str):
+        """Mark reminder as inactive in database"""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+
+            cursor.execute('''
+                UPDATE reminders
+                SET is_active = 0
+                WHERE id = ?
+            ''', (reminder_id,))
+
+            conn.commit()
+            conn.close()
+            print(f"ETC reminder deactivated in database: {reminder_id}")
+
+        except Exception as e:
+            print(f"Error deactivating reminder in database: {e}")
+
+    def get_active_reminders(self) -> List[Reminder]:
+        """Get all active reminders"""
+        now = datetime.now(self.timezone)
+        active_reminders = []
+
+        for reminder in self.reminders.values():
+            if reminder.due_at and reminder.due_at > now:
+                active_reminders.append(reminder)
+
+        return sorted(active_reminders, key=lambda r: r.due_at)
+
+    def cancel_reminder(self, reminder_id: str) -> bool:
+        """Cancel a specific reminder"""
+        if reminder_id in self.reminders:
+            # Mark as inactive in database
+            self._deactivate_reminder_in_db(reminder_id)
+
+            # Remove from memory
+            del self.reminders[reminder_id]
+            print(f"ETC reminder cancelled: {reminder_id}")
+            return True
+
+        return False
+
+    def cancel_reminders_for_message(self, message_ts: str, channel_id: str) -> int:
+        """Cancel all reminders for a specific message"""
+        cancelled_count = 0
+
+        # Find reminders for this message
+        reminders_to_cancel = []
+        for reminder_id, reminder in self.reminders.items():
+            if reminder.message_ts == message_ts and reminder.channel_id == channel_id:
+                reminders_to_cancel.append(reminder_id)
+
+        # Cancel each reminder
+        for reminder_id in reminders_to_cancel:
+            if self.cancel_reminder(reminder_id):
+                cancelled_count += 1
+
+        print(f"Cancelled {cancelled_count} ETC reminders for message {message_ts}")
+        return cancelled_count

@@ -9,11 +9,15 @@ from deadline_agent import DeadlineAgent  # Import your agent
 # Load environment variables
 load_dotenv()
 
-# Initialize Slack app
+# Initialize Slack app with retry configuration
 app = App(
     token=os.environ["SLACK_BOT_TOKEN"],
     signing_secret=os.environ["SLACK_SIGNING_SECRET"]
 )
+
+# Configure retry settings for better reliability
+import time
+from slack_sdk.errors import SlackApiError
 
 # Initialize scheduler (in-memory only)
 scheduler = BackgroundScheduler()
@@ -26,19 +30,86 @@ processed_messages = set()
 import pytz
 local_tz = pytz.timezone('Asia/Kolkata')  # IST timezone
 deadline_agent = DeadlineAgent(timezone='Asia/Kolkata')
-print(f"Using timezone: {local_tz}")
+
+# Recovery function to reschedule existing reminders on startup
+def reschedule_existing_reminders():
+    """Reschedule all active reminders from database on startup"""
+    try:
+        active_reminders = deadline_agent.get_active_reminders()
+        current_time = datetime.now(local_tz)
+
+        print(f"Found {len(active_reminders)} active reminders to reschedule")
+
+        for reminder in active_reminders:
+            # Calculate time difference
+            if reminder.due_at:
+                time_diff = (reminder.due_at - current_time).total_seconds()
+
+                if time_diff > 0:  # Only schedule future reminders
+                    # Create job ID
+                    job_id = f"{reminder.channel_id}_{reminder.message_ts}_{reminder.id}"
+
+                    # Schedule the reminder
+                    scheduler.add_job(
+                        send_reminder,
+                        'date',
+                        run_date=reminder.due_at,
+                        args=[reminder.channel_id, reminder.user_id, reminder.original_text, reminder.thread_ts],
+                        id=job_id
+                    )
+
+                    print(f"Rescheduled reminder: {reminder.original_text} -> {reminder.due_at}")
+                else:
+                    print(f"Skipped expired reminder: {reminder.original_text} (was due at {reminder.due_at})")
+
+    except Exception as e:
+        print(f"Error rescheduling reminders: {e}")
 
 def send_reminder(channel, thread_ts, user_id, original_message):
-    """Send the reminder message"""
-    try:
-        app.client.chat_postMessage(
-            channel=channel,
-            thread_ts=thread_ts,
-            text=f"<@{user_id}> Reminder: status!"
-        )
-        print(f"Reminder sent to {user_id}")
-    except Exception as e:
-        print(f"Error sending reminder: {e}")
+    """Send the reminder message with retry logic"""
+    max_retries = 3
+    retry_delay = 1
+
+    for attempt in range(max_retries):
+        try:
+            # Validate thread_ts before sending
+            if thread_ts and len(thread_ts) > 10 and '.' in thread_ts:  # Better validation
+                response = app.client.chat_postMessage(
+                    channel=channel,
+                    thread_ts=thread_ts,
+                    text=f"<@{user_id}> ETC Reminder: {original_message}"
+                )
+            else:
+                # Send as regular message if thread_ts is invalid
+                response = app.client.chat_postMessage(
+                    channel=channel,
+                    text=f"<@{user_id}> ETC Reminder: {original_message}"
+                )
+
+            if response["ok"]:
+                print(f"ETC reminder sent to {user_id}")
+                return
+            else:
+                print(f"Slack API error: {response.get('error', 'Unknown error')}")
+
+        except SlackApiError as e:
+            print(f"Slack API error (attempt {attempt + 1}): {e}")
+            if attempt < max_retries - 1:
+                time.sleep(retry_delay)
+                retry_delay *= 2  # Exponential backoff
+            else:
+                print(f"Failed to send ETC reminder after {max_retries} attempts")
+        except Exception as e:
+            print(f"Unexpected error sending ETC reminder (attempt {attempt + 1}): {e}")
+            if attempt < max_retries - 1:
+                time.sleep(retry_delay)
+                retry_delay *= 2
+            else:
+                print(f"Failed to send ETC reminder after {max_retries} attempts")
+
+# Reschedule existing reminders on startup
+reschedule_existing_reminders()
+print(f"Using timezone: {local_tz}")
 
 @app.event("message")
 def handle_message_events(body, event, say, logger):
@@ -51,6 +122,9 @@ def handle_message_events(body, event, say, logger):
             channel = event.get("channel")
             deleted_ts = event.get("deleted_ts")
             if deleted_ts:
+                # Cancel reminders using the agent's database method
+                cancelled_count = deadline_agent.cancel_reminders_for_message(deleted_ts, channel)
+
                 # Find and remove jobs for this specific message
                 jobs_to_remove = []
                 for job in scheduler.get_jobs():
@@ -60,6 +134,8 @@ def handle_message_events(body, event, say, logger):
                 for job_id in jobs_to_remove:
                     scheduler.remove_job(job_id)
                     print(f"Cancelled reminder: {job_id}")
+
+                print(f"Cancelled {cancelled_count} reminders from database and {len(jobs_to_remove)} jobs")
             return
 
         # Handle message editing events
@@ -78,10 +154,11 @@ def handle_message_events(body, event, say, logger):
                     print(f"Processing edited message: '{text}' from user: {user}")
 
                     # Use DeadlineAgent to detect deadline
-                    reminder = deadline_agent.handle_message(text, user)
+                    message_ts = edited_message.get("ts", str(datetime.now().timestamp()))
+                    reminder = deadline_agent.handle_message(text, user, channel, message_ts, thread_ts)
 
                     if reminder:
-                        print(f"Deadline found in edited message: {reminder.due_at}")
+                        print(f"ETC found in edited message: {reminder.due_at}")
                         print(f"Matched text: {reminder.matched_text}")
 
                         # Create unique job ID using message timestamp
@@ -99,11 +176,12 @@ def handle_message_events(body, event, say, logger):
 
                         # Check if the reminder is too close to now (less than 1 minute)
                         current_time = datetime.now(local_tz)
-                        time_diff = (reminder.due_at - current_time).total_seconds()
+                        if reminder.due_at:
+                            time_diff = (reminder.due_at - current_time).total_seconds()
 
-                        if time_diff < 60:  # Less than 1 minute
-                            print(f"Reminder too close to now ({time_diff:.1f} seconds), scheduling for 1 minute from now")
-                            reminder.due_at = current_time + timedelta(minutes=1)
+                            if time_diff < 60:  # Less than 1 minute
+                                print(f"Reminder too close to now ({time_diff:.1f} seconds), scheduling for 1 minute from now")
+                                reminder.due_at = current_time + timedelta(minutes=1)
 
                         # Schedule the reminder
                         scheduler.add_job(
@@ -184,10 +262,11 @@ def handle_message_events(body, event, say, logger):
         print(f"Processing: '{text}' from user: {user}")
 
         # Use DeadlineAgent to detect deadline
-        reminder = deadline_agent.handle_message(text, user)
+        message_ts = event.get("ts", str(datetime.now().timestamp()))
+        reminder = deadline_agent.handle_message(text, user, channel, message_ts, thread_ts)
 
         if reminder:
-            print(f"Deadline found: {reminder.due_at}")
+            print(f"ETC found: {reminder.due_at}")
             print(f"Matched text: {reminder.matched_text}")
 
             # Create unique job ID using message timestamp
@@ -205,11 +284,12 @@ def handle_message_events(body, event, say, logger):
 
             # Check if the reminder is too close to now (less than 1 minute)
             current_time = datetime.now(local_tz)
-            time_diff = (reminder.due_at - current_time).total_seconds()
+            if reminder.due_at:
+                time_diff = (reminder.due_at - current_time).total_seconds()
 
-            if time_diff < 60:  # Less than 1 minute
-                print(f"Reminder too close to now ({time_diff:.1f} seconds), scheduling for 1 minute from now")
-                reminder.due_at = current_time + timedelta(minutes=1)
+                if time_diff < 60:  # Less than 1 minute
+                    print(f"Reminder too close to now ({time_diff:.1f} seconds), scheduling for 1 minute from now")
+                    reminder.due_at = current_time + timedelta(minutes=1)
 
             # Schedule the reminder
             scheduler.add_job(
@@ -270,7 +350,7 @@ def handle_message_events(body, event, say, logger):
                     thread_ts=thread_ts
                 )
         else:
-            print("No deadline detected")
+            print("No ETC detected")
 
     except Exception as e:
         print(f"Error handling message: {e}")
@@ -282,16 +362,16 @@ def handle_mention(event, say):
     """Handle bot mentions"""
     jobs = scheduler.get_jobs()
     job_count = len(jobs)
-    say(f"Tracking {job_count} deadlines")
-    print(f"Status check: {job_count} active deadlines")
+    say(f"Tracking {job_count} ETC reminders")
+    print(f"Status check: {job_count} active ETC reminders")
 
 if __name__ == "__main__":
     app_token = os.environ.get("SLACK_APP_TOKEN")
 
     if app_token:
         handler = SocketModeHandler(app, app_token)
-        print("Slack Deadline Bot is running in Socket Mode!")
+        print("ETC-Monitor Bot is running in Socket Mode!")
         handler.start()
     else:
-        print("Slack Deadline Bot is running on port 3000!")
+        print("ETC-Monitor Bot is running on port 3000!")
         app.start(port=3000)
