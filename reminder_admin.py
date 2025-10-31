@@ -12,6 +12,10 @@ app.secret_key = 'your-secret-key-here'
 slack_token = os.environ.get('SLACK_BOT_TOKEN')
 slack_client = WebClient(token=slack_token) if slack_token else None
 
+# Add error handling for missing environment variables
+if not slack_token:
+    print("⚠️  Warning: SLACK_BOT_TOKEN not found. User/channel names will show IDs instead of names.")
+
 # Cache for user and channel names
 user_cache = {}
 channel_cache = {}
@@ -725,18 +729,10 @@ HTML_TEMPLATE = '''
                                         </td>
                                         <td>
                                             {% if reminder.is_active == 1 %}
-                                                {% set due_time = reminder.due_at|replace('T', ' ')|replace('+05:30', '') %}
-                                                {% if due_time > now %}
-                                                    <span class="status-badge active">
-                                                        <span class="status-dot active"></span>
-                                                        Active
-                                                    </span>
-                                                {% else %}
-                                                    <span class="status-badge expired">
-                                                        <span class="status-dot expired"></span>
-                                                        Expired
-                                                    </span>
-                                                {% endif %}
+                                                <span class="status-badge active">
+                                                    <span class="status-dot active"></span>
+                                                    Active
+                                                </span>
                                             {% else %}
                                                 <span class="status-badge inactive">
                                                     <span class="status-dot inactive"></span>
@@ -966,16 +962,12 @@ def index():
     active_reminders = len(active_reminders_list)
     expired_reminders = total_reminders - active_reminders
 
-    # Get current time for comparison
-    now = datetime.now(pytz.timezone('Asia/Kolkata')).strftime('%Y-%m-%d %H:%M:%S')
-
     return render_template_string(HTML_TEMPLATE,
                                 all_reminders=all_reminders,
                                 active_reminders_list=active_reminders_list,
                                 total_reminders=total_reminders,
                                 active_reminders=active_reminders,
                                 expired_reminders=expired_reminders,
-                                now=now,
                                 get_user_name=get_user_name,
                                 get_channel_name=get_channel_name,
                                 format_datetime=format_datetime)
@@ -999,6 +991,38 @@ def serve_logo():
 @app.route('/favicon.ico')
 def serve_favicon():
     return send_from_directory('.', 'favicon.ico')
+
+# API endpoints for real-time updates
+@app.route('/api/dashboard')
+def api_dashboard():
+    all_reminders = get_all_reminders()
+    active_reminders_list = get_active_reminders()
+
+    total_reminders = len(all_reminders)
+    active_reminders = len(active_reminders_list)
+    expired_reminders = total_reminders - active_reminders
+
+    return {
+        'total_reminders': total_reminders,
+        'active_reminders': active_reminders,
+        'expired_reminders': expired_reminders
+    }
+
+@app.route('/api/reminders')
+def api_reminders():
+    all_reminders = get_all_reminders()
+
+    # Convert to list of dicts with formatted data
+    reminders_data = []
+    for reminder in all_reminders:
+        reminder_dict = dict(reminder)
+        reminder_dict['user_name'] = get_user_name(reminder.user_id)
+        reminder_dict['channel_name'] = get_channel_name(reminder.channel_id)
+        reminder_dict['formatted_due_at'] = format_datetime(reminder.due_at)
+        reminder_dict['formatted_created_at'] = format_datetime(reminder.created_at)
+        reminders_data.append(reminder_dict)
+
+    return {'reminders': reminders_data}
 
 if __name__ == '__main__':
     print("🌐 Starting ETC-Monitor Admin Panel...")
