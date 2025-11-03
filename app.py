@@ -77,13 +77,13 @@ def send_reminder(channel, thread_ts, user_id, original_message):
                 response = app.client.chat_postMessage(
                     channel=channel,
                     thread_ts=thread_ts,
-                    text=f"<@{user_id}> ETC Reminder: {original_message}"
+                    text=f"<@{user_id}> Status!"
                 )
             else:
                 # Send as regular message if thread_ts is invalid
                 response = app.client.chat_postMessage(
                     channel=channel,
-                    text=f"<@{user_id}> ETC Reminder: {original_message}"
+                    text=f"<@{user_id}> Status!"
                 )
 
             if response["ok"]:

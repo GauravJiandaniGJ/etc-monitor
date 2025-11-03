@@ -2,6 +2,8 @@ import re
 import uuid
 import sqlite3
 import json
+import os
+import requests
 from dataclasses import dataclass, asdict
 from datetime import datetime, timedelta
 from typing import Optional, Dict, List
@@ -31,6 +33,14 @@ class DeadlineAgent:
         self.db_path = db_path
         self.reminders: Dict[str, Reminder] = {}
         self.user_history: Dict[str, List[Dict]] = {}  # Track user's last ETC for context
+        
+        # DeepSeek API configuration
+        self.deepseek_api_key = os.getenv('DEEPSEEK_API_KEY')
+        self.deepseek_api_base = os.getenv('DEEPSEEK_API_BASE', 'https://api.deepseek.com/v1')
+        self.deepseek_timeout = int(os.getenv('DEEPSEEK_TIMEOUT', '60'))
+        self.deepseek_max_tokens = int(os.getenv('DEEPSEEK_MAX_TOKENS', '4096'))
+        self.deepseek_temperature = float(os.getenv('DEEPSEEK_TEMPERATURE', '0.1'))
+        
         self._init_database()
         self._load_reminders_from_db()
 
@@ -211,6 +221,135 @@ class DeadlineAgent:
             # "before" patterns
             r"before\s+(.+?)(?:\s|$|\.|\,|\!|\?)",
         ]
+
+    def _is_etc_format(self, message: str) -> bool:
+        """Check if message follows ETC: format"""
+        # Primary ETC patterns
+        etc_patterns = [
+            r'^ETC:\s*(.+)$',                    # ETC: [time/date]
+            r'^ETC\s+(.+)$',                     # ETC [time/date]
+            r'.*ETC:\s*(.+)$',                   # [text] ETC: [time/date]
+            r'.*ETC\s+(.+)$',                    # [text] ETC [time/date]
+        ]
+        
+        for pattern in etc_patterns:
+            if re.search(pattern, message.strip(), re.IGNORECASE):
+                return True
+        return False
+
+    def _extract_etc_content(self, message: str) -> Optional[str]:
+        """Extract the deadline part from ETC format"""
+        etc_patterns = [
+            r'^ETC:\s*(.+)$',                    # ETC: [time/date]
+            r'^ETC\s+(.+)$',                     # ETC [time/date]
+            r'.*ETC:\s*(.+)$',                   # [text] ETC: [time/date]
+            r'.*ETC\s+(.+)$',                    # [text] ETC [time/date]
+        ]
+        
+        for pattern in etc_patterns:
+            match = re.search(pattern, message.strip(), re.IGNORECASE)
+            if match:
+                return match.group(1).strip()
+        return None
+
+    def _call_deepseek_api(self, message: str) -> Optional[Dict]:
+        """Call DeepSeek API to analyze ETC message and extract deadline information"""
+        if not self.deepseek_api_key:
+            print("DeepSeek API key not configured")
+            return None
+            
+        try:
+            current_time = datetime.now(self.timezone)
+            current_date = current_time.strftime('%Y-%m-%d')
+            current_day = current_time.strftime('%A')
+            current_time_str = current_time.strftime('%H:%M')
+            
+            prompt = f"""You are an intelligent deadline parser for an ETC (Estimated Time of Completion) reminder system.
+
+Current context:
+- Current date: {current_date} ({current_day})
+- Current time: {current_time_str}
+- Timezone: {self.timezone}
+
+User message: "{message}"
+
+Task: Extract deadline information from this ETC message. The message should contain "ETC:" or "ETC" followed by time/date information.
+
+Parse and return ONLY a JSON response with these fields:
+{{
+    "has_deadline": true/false,
+    "deadline_text": "extracted time/date portion",
+    "confidence": 0.0-1.0,
+    "reason": "explanation of parsing"
+}}
+
+Rules:
+1. Only return has_deadline=true if you're confident this is a legitimate ETC request
+2. Extract the time/date portion after "ETC:" or "ETC"
+3. Be very specific about deadline_text - include exactly what should be parsed
+4. Return has_deadline=false for normal conversations that happen to mention time words
+
+Examples:
+- "ETC: today 5 PM" → {{"has_deadline": true, "deadline_text": "today 5 PM", "confidence": 0.95}}
+- "ETC tomorrow 2pm" → {{"has_deadline": true, "deadline_text": "tomorrow 2pm", "confidence": 0.95}}
+- "can we meet today?" → {{"has_deadline": false, "deadline_text": "", "confidence": 0.9}}
+- "I'll finish this today" → {{"has_deadline": false, "deadline_text": "", "confidence": 0.9}}
+
+Return only the JSON, no other text."""
+
+            headers = {
+                'Authorization': f'Bearer {self.deepseek_api_key}',
+                'Content-Type': 'application/json',
+            }
+            
+            data = {
+                'model': 'deepseek-chat',
+                'messages': [
+                    {
+                        'role': 'user',
+                        'content': prompt
+                    }
+                ],
+                'max_tokens': self.deepseek_max_tokens,
+                'temperature': self.deepseek_temperature,
+                'stream': False
+            }
+            
+            response = requests.post(
+                f'{self.deepseek_api_base}/chat/completions',
+                headers=headers,
+                json=data,
+                timeout=self.deepseek_timeout
+            )
+            
+            if response.status_code == 200:
+                result = response.json()
+                content = result['choices'][0]['message']['content'].strip()
+                
+                # Try to parse JSON from response
+                try:
+                    # Remove any markdown formatting
+                    if content.startswith('```json'):
+                        content = content[7:]
+                    if content.endswith('```'):
+                        content = content[:-3]
+                    content = content.strip()
+                    
+                    parsed_result = json.loads(content)
+                    print(f"DeepSeek API response: {parsed_result}")
+                    return parsed_result
+                    
+                except json.JSONDecodeError as e:
+                    print(f"Failed to parse DeepSeek JSON response: {e}")
+                    print(f"Raw content: {content}")
+                    return None
+            else:
+                print(f"DeepSeek API error: {response.status_code} - {response.text}")
+                return None
+                
+        except Exception as e:
+            print(f"Error calling DeepSeek API: {e}")
+            return None
 
     def _detect_deadline_text(self, message: str) -> Optional[str]:
         """
@@ -1233,10 +1372,17 @@ class DeadlineAgent:
 
     def handle_message(self, message: str, user_id: str, channel_id: Optional[str] = None, message_ts: Optional[str] = None, thread_ts: Optional[str] = None) -> Optional[Reminder]:
         """
-        Main function to process a message and detect deadlines with contextual understanding.
+        Main function to process a message and detect deadlines with improved contextual understanding.
         Returns a Reminder object if deadline is found, None otherwise.
         """
         print(f"Processing message: '{message}' from user: {user_id}")
+
+        # First check if message has ETC format
+        if not self._is_etc_format(message):
+            print("Message does not contain ETC format - skipping")
+            return None
+            
+        print("ETC format detected - proceeding with deadline analysis")
 
         # Check if this is a contextual request (again, same, repeat, etc.)
         if self._is_contextual_request(message):
@@ -1250,14 +1396,30 @@ class DeadlineAgent:
                 if deadline_text:
                     print(f"Using contextual deadline: {deadline_text}")
                 else:
-                    print("No contextual deadline found, trying normal detection")
-                    deadline_text = self._detect_deadline_text(message)
+                    print("No contextual deadline found, extracting from current message")
+                    deadline_text = self._extract_etc_content(message)
             else:
-                print("No user history found, trying normal detection")
-                deadline_text = self._detect_deadline_text(message)
+                print("No user history found, extracting from current message")
+                deadline_text = self._extract_etc_content(message)
         else:
-            # Normal deadline detection
-            deadline_text = self._detect_deadline_text(message)
+            # Use DeepSeek API for intelligent deadline detection
+            deepseek_result = self._call_deepseek_api(message)
+            
+            if deepseek_result and deepseek_result.get('has_deadline', False):
+                confidence = deepseek_result.get('confidence', 0.0)
+                if confidence >= 0.7:  # Only proceed if confidence is high enough
+                    deadline_text = deepseek_result.get('deadline_text', '')
+                    print(f"DeepSeek detected deadline: '{deadline_text}' (confidence: {confidence})")
+                else:
+                    print(f"DeepSeek confidence too low: {confidence}")
+                    return None
+            else:
+                print("DeepSeek did not detect a valid deadline")
+                # Fallback to manual extraction if DeepSeek fails
+                deadline_text = self._extract_etc_content(message)
+                if not deadline_text:
+                    print("No deadline text found even in fallback")
+                    return None
 
         if not deadline_text:
             print("No ETC text detected")
