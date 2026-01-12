@@ -310,15 +310,16 @@ class DeadlineAgent:
 
     def _extract_etc_content(self, message: str) -> Optional[str]:
         """Extract the deadline part from ETC format - comprehensive extraction"""
-        # Comprehensive patterns to extract ETC content
+        # IMPORTANT: Extract EVERYTHING after ETC, not just until first space
+        # "etc 1 min" should extract "1 min", not just "1"
+
+        # First, try to get everything after ETC (greedy patterns first)
         etc_patterns = [
-            r'ETC:\s*(.+?)(?:\s|$|\.|,|!|\?)',      # ETC: [time/date]
-            r'ETC\s+(.+?)(?:\s|$|\.|,|!|\?)',       # ETC [time/date]
-            r'ETC\s*-\s*(.+?)(?:\s|$|\.|,|!|\?)',   # ETC- [time/date]
-            r'ETC\s*=\s*(.+?)(?:\s|$|\.|,|!|\?)',   # ETC= [time/date]
-            r'ETC\s*\(\s*(.+?)\s*\)',               # ETC([time/date])
-            r'ETC:\s*(.+)$',                         # ETC: [rest of message]
-            r'ETC\s+(.+)$',                          # ETC [rest of message]
+            r'ETC:\s*(.+)$',                         # ETC: [rest of message] - GREEDY
+            r'ETC\s+(.+)$',                          # ETC [rest of message] - GREEDY
+            r'ETC\s*-\s*(.+)$',                      # ETC- [rest of message] - GREEDY
+            r'ETC\s*=\s*(.+)$',                      # ETC= [rest of message] - GREEDY
+            r'ETC\s*\(\s*(.+?)\s*\)',                # ETC([time/date])
         ]
 
         for pattern in etc_patterns:
@@ -328,6 +329,7 @@ class DeadlineAgent:
                 # Clean up common trailing punctuation
                 content = re.sub(r'[.,;!?]+$', '', content).strip()
                 if content:
+                    print(f"📝 Extracted ETC content: '{content}' from '{message}'")
                     return content
 
         # Fallback: extract everything after ETC
@@ -420,12 +422,24 @@ RESPONSE FORMAT (JSON only):
 
 COMPREHENSIVE EXAMPLES (LEARN FROM ALL THESE - BE EXPERT):
 
-=== RELATIVE TIME EXAMPLES ===
+=== RELATIVE TIME EXAMPLES (CRITICAL - PRESERVE THE UNIT!) ===
 Input: "ETC: 2min"
-Output: {{"has_deadline": true, "deadline_text": "2 minutes", "confidence": 0.99, "reason": "Relative time - 2 minutes from now", "suggested_response": "Got it! I'll remind you in 2 minutes."}}
+Output: {{"has_deadline": true, "deadline_text": "2 min", "confidence": 0.99, "reason": "Relative time - 2 minutes from now", "suggested_response": "Got it! I'll remind you in 2 minutes."}}
+
+Input: "ETC: 1 min"
+Output: {{"has_deadline": true, "deadline_text": "1 min", "confidence": 0.99, "reason": "Relative time - 1 minute from now", "suggested_response": "Got it! I'll remind you in 1 minute."}}
+
+Input: "ETC: 3 mins"
+Output: {{"has_deadline": true, "deadline_text": "3 mins", "confidence": 0.99, "reason": "Relative time - 3 minutes from now", "suggested_response": "Perfect! I'll remind you in 3 minutes."}}
+
+Input: "etc 1 min"
+Output: {{"has_deadline": true, "deadline_text": "1 min", "confidence": 0.99, "reason": "Relative time - 1 minute from now", "suggested_response": "Got it! I'll remind you in 1 minute."}}
+
+Input: "etc 5 min"
+Output: {{"has_deadline": true, "deadline_text": "5 min", "confidence": 0.99, "reason": "Relative time - 5 minutes from now", "suggested_response": "Got it! I'll remind you in 5 minutes."}}
 
 Input: "ETC: 30 mins"
-Output: {{"has_deadline": true, "deadline_text": "30 minutes", "confidence": 0.99, "reason": "Relative time - 30 minutes from now", "suggested_response": "Perfect! I'll remind you in 30 minutes."}}
+Output: {{"has_deadline": true, "deadline_text": "30 mins", "confidence": 0.99, "reason": "Relative time - 30 minutes from now", "suggested_response": "Perfect! I'll remind you in 30 minutes."}}
 
 Input: "ETC: 5 hours"
 Output: {{"has_deadline": true, "deadline_text": "5 hours", "confidence": 0.99, "reason": "Relative time - 5 hours from now", "suggested_response": "Understood! I'll check back with you in 5 hours."}}
@@ -437,7 +451,7 @@ Input: "ETC: 2 days"
 Output: {{"has_deadline": true, "deadline_text": "2 days", "confidence": 0.99, "reason": "Relative time - 2 days from now", "suggested_response": "Understood! I'll remind you in 2 days."}}
 
 Input: "ETC: half hour"
-Output: {{"has_deadline": true, "deadline_text": "30 minutes", "confidence": 0.98, "reason": "Half hour = 30 minutes", "suggested_response": "Got it! I'll remind you in 30 minutes."}}
+Output: {{"has_deadline": true, "deadline_text": "half hour", "confidence": 0.98, "reason": "Half hour = 30 minutes", "suggested_response": "Got it! I'll remind you in 30 minutes."}}
 
 === EOD EXAMPLES (END OF DAY = 7:00 PM) ===
 Input: "ETC: EOD"
@@ -532,7 +546,9 @@ Output: {{"has_deadline": false, "deadline_text": "", "confidence": 0.95, "reaso
 CRITICAL INSTRUCTIONS:
 - Be AGGRESSIVE in detection - if ETC is mentioned, extract EVERYTHING
 - Include ALL parts: if both day AND time mentioned, extract BOTH
-- Normalize but preserve meaning: "2min" → "2 minutes", "tomorrow 3pm" → "tomorrow 3pm"
+- For RELATIVE TIMES: ALWAYS preserve the time unit! "1 min" → "1 min", "3 mins" → "3 mins", "5 hours" → "5 hours"
+- DO NOT convert "1 min" to just "1" or "3 mins" to just "3" - this will cause errors!
+- Normalize but preserve meaning: "2min" → "2 min", "tomorrow 3pm" → "tomorrow 3pm"
 - Confidence should be HIGH (0.95+) for clear ETC requests
 - Only return has_deadline=false if absolutely certain it's NOT an ETC request
 - Return ONLY valid JSON, no markdown, no code blocks, no explanations outside JSON"""
@@ -663,6 +679,110 @@ CRITICAL INSTRUCTIONS:
 
         # Handle common time expressions first
         date_text_lower = date_text.lower().strip()
+
+        # ============================================================
+        # PRIORITY 1: RELATIVE TIME EXPRESSIONS (minutes, hours, days)
+        # Must be checked FIRST before any other parsing
+        # ============================================================
+
+        # Comprehensive relative time patterns - check these FIRST
+        relative_patterns = [
+            # Pattern: "X min", "X mins", "X minute", "X minutes", "Xm" (with or without space)
+            (r'^(\d+)\s*(?:m|min|mins|minute|minutes)$', 'minutes'),
+            (r'^in\s+(\d+)\s*(?:m|min|mins|minute|minutes)$', 'minutes'),
+            (r'^(\d+)\s*(?:m|min|mins|minute|minutes)\s+(?:from\s+now|later)?$', 'minutes'),
+
+            # Pattern: "X hr", "X hrs", "X hour", "X hours", "Xh"
+            (r'^(\d+)\s*(?:h|hr|hrs|hour|hours)$', 'hours'),
+            (r'^in\s+(\d+)\s*(?:h|hr|hrs|hour|hours)$', 'hours'),
+            (r'^(\d+)\s*(?:h|hr|hrs|hour|hours)\s+(?:from\s+now|later)?$', 'hours'),
+
+            # Pattern: "X day", "X days", "Xd"
+            (r'^(\d+)\s*(?:d|day|days)$', 'days'),
+            (r'^in\s+(\d+)\s*(?:d|day|days)$', 'days'),
+            (r'^(\d+)\s*(?:d|day|days)\s+(?:from\s+now|later)?$', 'days'),
+
+            # Pattern: "X week", "X weeks", "Xw"
+            (r'^(\d+)\s*(?:w|week|weeks)$', 'weeks'),
+            (r'^in\s+(\d+)\s*(?:w|week|weeks)$', 'weeks'),
+
+            # Pattern: "X sec", "X secs", "X second", "X seconds", "Xs"
+            (r'^(\d+)\s*(?:s|sec|secs|second|seconds)$', 'seconds'),
+            (r'^in\s+(\d+)\s*(?:s|sec|secs|second|seconds)$', 'seconds'),
+
+            # Pattern: "half hour", "quarter hour"
+            (r'^half\s+(?:an?\s+)?hour$', 'half_hour'),
+            (r'^quarter\s+(?:an?\s+)?hour$', 'quarter_hour'),
+        ]
+
+        for pattern, unit in relative_patterns:
+            match = re.search(pattern, date_text_lower)
+            if match:
+                if unit == 'half_hour':
+                    future_time = now + timedelta(minutes=30)
+                    print(f"✅ Relative time (half hour) parsed: {future_time}")
+                    return future_time
+                elif unit == 'quarter_hour':
+                    future_time = now + timedelta(minutes=15)
+                    print(f"✅ Relative time (quarter hour) parsed: {future_time}")
+                    return future_time
+                else:
+                    amount = int(match.group(1))
+                    if unit == 'seconds':
+                        future_time = now + timedelta(seconds=amount)
+                    elif unit == 'minutes':
+                        future_time = now + timedelta(minutes=amount)
+                    elif unit == 'hours':
+                        future_time = now + timedelta(hours=amount)
+                    elif unit == 'days':
+                        future_time = now + timedelta(days=amount)
+                    elif unit == 'weeks':
+                        future_time = now + timedelta(weeks=amount)
+                    else:
+                        continue
+
+                    print(f"✅ Relative time ({amount} {unit}) parsed: {future_time}")
+                    return future_time
+
+        # Also check for flexible relative patterns (not at start of string)
+        # Priority: check for time units in order (min before m, hour before h, etc.)
+        flexible_patterns = [
+            (r'(\d+)\s*(minutes?|mins?)', 'minutes'),
+            (r'(\d+)\s*(hours?|hrs?)', 'hours'),
+            (r'(\d+)\s*(days?)', 'days'),
+            (r'(\d+)\s*(weeks?)', 'weeks'),
+            (r'(\d+)\s*(seconds?|secs?)', 'seconds'),
+            (r'(\d+)\s*m\b', 'minutes'),  # "5m" at word boundary
+            (r'(\d+)\s*h\b', 'hours'),    # "2h" at word boundary
+            (r'(\d+)\s*d\b', 'days'),     # "3d" at word boundary
+            (r'(\d+)\s*w\b', 'weeks'),    # "1w" at word boundary
+            (r'(\d+)\s*s\b', 'seconds'),  # "30s" at word boundary
+        ]
+
+        for pattern, unit in flexible_patterns:
+            match = re.search(pattern, date_text_lower)
+            if match:
+                amount = int(match.group(1))
+
+                if unit == 'seconds':
+                    future_time = now + timedelta(seconds=amount)
+                elif unit == 'minutes':
+                    future_time = now + timedelta(minutes=amount)
+                elif unit == 'hours':
+                    future_time = now + timedelta(hours=amount)
+                elif unit == 'days':
+                    future_time = now + timedelta(days=amount)
+                elif unit == 'weeks':
+                    future_time = now + timedelta(weeks=amount)
+                else:
+                    continue
+
+                print(f"✅ Flexible relative time ({amount} {unit}) parsed: {future_time}")
+                return future_time
+
+        # ============================================================
+        # PRIORITY 2: EOD and other expressions
+        # ============================================================
 
         # EOD and work-related expressions - 7 PM (office hours)
         eod_expressions = [
@@ -1796,7 +1916,7 @@ CRITICAL INSTRUCTIONS:
             print("❌ No ETC text detected")
             return None
 
-        print(f"📅 Parsing deadline text: '{deadline_text}'")
+        print(f"📅 Parsing deadline text: '{deadline_text}' (length: {len(deadline_text)})")
 
         # Multi-strategy datetime parsing
         due_at = None
