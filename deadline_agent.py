@@ -10,6 +10,15 @@ from typing import Optional, Dict, List
 import pytz
 import dateparser
 
+# Optional Gemini AI import - bot works without it
+try:
+    import google.generativeai as genai
+    GEMINI_AVAILABLE = True
+except ImportError:
+    GEMINI_AVAILABLE = False
+    print("⚠️  google-generativeai not installed. Install with: pip install google-generativeai")
+    print("   Bot will work with regex-based parsing only.")
+
 
 @dataclass
 class Reminder:
@@ -33,14 +42,37 @@ class DeadlineAgent:
         self.db_path = db_path
         self.reminders: Dict[str, Reminder] = {}
         self.user_history: Dict[str, List[Dict]] = {}  # Track user's last ETC for context
-        
-        # DeepSeek API configuration
-        self.deepseek_api_key = os.getenv('DEEPSEEK_API_KEY')
-        self.deepseek_api_base = os.getenv('DEEPSEEK_API_BASE', 'https://api.deepseek.com/v1')
-        self.deepseek_timeout = int(os.getenv('DEEPSEEK_TIMEOUT', '60'))
-        self.deepseek_max_tokens = int(os.getenv('DEEPSEEK_MAX_TOKENS', '4096'))
-        self.deepseek_temperature = float(os.getenv('DEEPSEEK_TEMPERATURE', '0.1'))
-        
+        self._last_suggested_response: Optional[str] = None  # Store last Gemini response
+
+        # Gemini API configuration
+        self.gemini_api_key = os.getenv('GEMINI_API_KEY')
+        self.gemini_model = os.getenv('GEMINI_MODEL', 'gemini-1.5-flash')
+        self.gemini_temperature = float(os.getenv('GEMINI_TEMPERATURE', '0.2'))
+
+        # Initialize Gemini if API key is provided and package is available
+        if not GEMINI_AVAILABLE:
+            print("ℹ️  Gemini package not installed - using regex fallback only")
+            print("   To enable Gemini: pip install google-generativeai")
+            self.gemini_client = None
+        elif self.gemini_api_key:
+            try:
+                genai.configure(api_key=self.gemini_api_key)
+                self.gemini_client = genai.GenerativeModel(
+                    model_name=self.gemini_model,
+                    generation_config={
+                        'temperature': self.gemini_temperature,
+                        'max_output_tokens': 2048,
+                    }
+                )
+                print(f"✅ Gemini API initialized with model: {self.gemini_model}")
+            except Exception as e:
+                print(f"⚠️  Error initializing Gemini API: {e}")
+                print("   Falling back to regex-based parsing")
+                self.gemini_client = None
+        else:
+            print("ℹ️  Gemini API key not configured - using regex fallback only")
+            self.gemini_client = None
+
         self._init_database()
         self._load_reminders_from_db()
 
@@ -171,8 +203,11 @@ class DeadlineAgent:
             # Common informal expressions without time (lower priority)
             r"(tonight|today|tomorrow|day\s+after\s+tomorrow|yesterday)",
 
-            # EOD and time of day variations
-            r"(eod|end\s+of\s+day|end\s+of\s+work|close\s+of\s+business|cob)",
+            # EOD and time of day variations (comprehensive)
+            r"(by\s+tomorrow\s+eod|tomorrow\s+eod|by\s+eod|till\s+eod|until\s+eod|before\s+eod)",
+            r"(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\s+(eod|end\s+of\s+day)",
+            r"(today\s+eod|tonight\s+eod|this\s+week\s+eod|next\s+week\s+eod)",
+            r"(eod|end\s+of\s+day|end\s+of\s+work|close\s+of\s+business|cob|end\s+of\s+business|eob)",
             r"(morning|evening|night|noon|midnight|dawn|dusk)",
             r"(early\s+morning|late\s+evening|late\s+night|early\s+evening)",
 
@@ -223,132 +258,339 @@ class DeadlineAgent:
         ]
 
     def _is_etc_format(self, message: str) -> bool:
-        """Check if message follows ETC: format"""
-        # Primary ETC patterns
+        """Check if message follows ETC format - comprehensive detection"""
+        message_upper = message.upper().strip()
+
+        # Comprehensive ETC patterns - catch ETC anywhere in message
         etc_patterns = [
             r'^ETC:\s*(.+)$',                    # ETC: [time/date]
             r'^ETC\s+(.+)$',                     # ETC [time/date]
             r'.*ETC:\s*(.+)$',                   # [text] ETC: [time/date]
             r'.*ETC\s+(.+)$',                    # [text] ETC [time/date]
+            r'ETC\s*[:]\s*(.+)',                 # ETC: with flexible spacing
+            r'ETC\s+(.+)',                       # ETC followed by anything
+            r'ETC\s*-\s*(.+)',                   # ETC- [time/date]
+            r'ETC\s*=\s*(.+)',                   # ETC= [time/date]
+            r'ETC\s*\((.+)\)',                   # ETC([time/date])
         ]
-        
+
+        # Also check for common variations
+        etc_keywords = ['ETC:', 'ETC ', 'ETC-', 'ETC=', 'ETC(']
+        has_etc_keyword = any(keyword in message_upper for keyword in etc_keywords)
+
+        # Check if message contains ETC followed by time/date indicators
+        if has_etc_keyword:
+            # Look for time/date patterns after ETC
+            time_indicators = [
+                r'\d+\s*(min|mins|minute|minutes|hour|hours|day|days|week|weeks)',
+                r'(today|tomorrow|tonight|monday|tuesday|wednesday|thursday|friday|saturday|sunday)',
+                r'\d{1,2}(:\d{2})?\s*(am|pm|AM|PM)',
+                r'(EOD|eod|end of day|morning|evening|night|noon)',
+                r'\d{1,2}(st|nd|rd|th)?\s*(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)',
+            ]
+
+            # Extract text after ETC
+            etc_match = re.search(r'ETC[:\s\-=\(]*(.+)', message, re.IGNORECASE)
+            if etc_match:
+                etc_content = etc_match.group(1).strip()
+                # Check if content has time/date indicators
+                for indicator in time_indicators:
+                    if re.search(indicator, etc_content, re.IGNORECASE):
+                        return True
+                # If ETC is followed by something, consider it valid
+                if etc_content:
+                    return True
+
+        # Check regex patterns
         for pattern in etc_patterns:
-            if re.search(pattern, message.strip(), re.IGNORECASE):
+            if re.search(pattern, message, re.IGNORECASE):
                 return True
+
         return False
 
     def _extract_etc_content(self, message: str) -> Optional[str]:
-        """Extract the deadline part from ETC format"""
+        """Extract the deadline part from ETC format - comprehensive extraction"""
+        # Comprehensive patterns to extract ETC content
         etc_patterns = [
-            r'^ETC:\s*(.+)$',                    # ETC: [time/date]
-            r'^ETC\s+(.+)$',                     # ETC [time/date]
-            r'.*ETC:\s*(.+)$',                   # [text] ETC: [time/date]
-            r'.*ETC\s+(.+)$',                    # [text] ETC [time/date]
+            r'ETC:\s*(.+?)(?:\s|$|\.|,|!|\?)',      # ETC: [time/date]
+            r'ETC\s+(.+?)(?:\s|$|\.|,|!|\?)',       # ETC [time/date]
+            r'ETC\s*-\s*(.+?)(?:\s|$|\.|,|!|\?)',   # ETC- [time/date]
+            r'ETC\s*=\s*(.+?)(?:\s|$|\.|,|!|\?)',   # ETC= [time/date]
+            r'ETC\s*\(\s*(.+?)\s*\)',               # ETC([time/date])
+            r'ETC:\s*(.+)$',                         # ETC: [rest of message]
+            r'ETC\s+(.+)$',                          # ETC [rest of message]
         ]
-        
+
         for pattern in etc_patterns:
-            match = re.search(pattern, message.strip(), re.IGNORECASE)
+            match = re.search(pattern, message, re.IGNORECASE)
             if match:
-                return match.group(1).strip()
+                content = match.group(1).strip()
+                # Clean up common trailing punctuation
+                content = re.sub(r'[.,;!?]+$', '', content).strip()
+                if content:
+                    return content
+
+        # Fallback: extract everything after ETC
+        etc_match = re.search(r'ETC[:\s\-=\(]*(.+)', message, re.IGNORECASE)
+        if etc_match:
+            content = etc_match.group(1).strip()
+            # Remove trailing punctuation
+            content = re.sub(r'[.,;!?]+$', '', content).strip()
+            if content:
+                return content
+
         return None
 
-    def _call_deepseek_api(self, message: str) -> Optional[Dict]:
-        """Call DeepSeek API to analyze ETC message and extract deadline information"""
-        if not self.deepseek_api_key:
-            print("DeepSeek API key not configured")
+    def _call_gemini_api(self, message: str, user_history: Optional[Dict] = None) -> Optional[Dict]:
+        """Call Gemini API to intelligently analyze ETC message and extract deadline information"""
+        if not self.gemini_client:
+            print("Gemini API not configured")
             return None
-            
+
         try:
             current_time = datetime.now(self.timezone)
             current_date = current_time.strftime('%Y-%m-%d')
             current_day = current_time.strftime('%A')
-            current_time_str = current_time.strftime('%H:%M')
-            
-            prompt = f"""You are an intelligent deadline parser for an ETC (Estimated Time of Completion) reminder system.
+            current_time_str = current_time.strftime('%H:%M:%S')
+            current_datetime_iso = current_time.isoformat()
 
-Current context:
+            # Build context from user history if available
+            history_context = ""
+            if user_history:
+                last_etc = user_history.get('matched_text', '')
+                last_due = user_history.get('due_at', '')
+                if last_etc:
+                    history_context = f"\nUser's last ETC was: '{last_etc}' (was due: {last_due})"
+
+            prompt = f"""You are an EXPERT AI deadline parser for an ETC (Estimated Time of Completion) reminder system. Your job is to be COMPREHENSIVE and catch EVERY possible time/date expression - nothing should be missed.
+
+CURRENT CONTEXT:
 - Current date: {current_date} ({current_day})
 - Current time: {current_time_str}
-- Timezone: {self.timezone}
+- Current datetime (ISO): {current_datetime_iso}
+- Timezone: {self.timezone}{history_context}
 
-User message: "{message}"
+USER MESSAGE: "{message}"
 
-Task: Extract deadline information from this ETC message. The message should contain "ETC:" or "ETC" followed by time/date information.
+YOUR EXPERT TASK:
+1. ACTIVELY search for ANY ETC deadline in the message - be aggressive, don't miss anything
+2. Extract the COMPLETE time/date portion - include everything mentioned (day, date, time)
+3. Normalize it for parsing (e.g., "2min" → "2 minutes", "tomorrow 3pm" → "tomorrow 3pm")
+4. Provide intelligent, expert-level understanding
 
-Parse and return ONLY a JSON response with these fields:
+COMPREHENSIVE ANALYSIS RULES (MISS NOTHING - BE AN EXPERT):
+- ETC can appear as: "ETC:", "ETC ", "ETC-", "ETC=", "ETC(", "etc:", "etc ", "Etc:"
+- Extract EVERYTHING after ETC until end of message or punctuation
+- Handle ALL relative times: "2min", "2 min", "2mins", "2minutes", "in 2 min", "2 min from now", "2m", "2h", "2hrs", "half hour", "quarter hour"
+- Handle ALL absolute times: "today 5 PM", "today at 5pm", "tomorrow 3pm", "tomorrow at 3:00 PM", "tomorrow morning", "tomorrow evening"
+- Handle ALL days: "today", "tomorrow", "tonight", "day after tomorrow", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"
+- Handle ALL day variations: "next monday", "this friday", "coming monday", "next week monday", "monday next week", "upcoming friday"
+- Handle ALL date formats: "Dec 25", "25th Dec", "25 Dec", "December 25", "25/12", "12/25", "2024-12-25", "jan 15", "15 jan"
+- Handle ALL time formats: "5pm", "5 PM", "5:00pm", "17:00", "17:00:00", "5 o'clock", "five pm", "5p", "5 p.m."
+- Handle ALL EOD expressions (EOD = End of Day = 7:00 PM office hours):
+  * "EOD", "eod", "end of day", "end of business", "close of business", "COB", "cob"
+  * "by EOD", "till EOD", "until EOD", "before EOD"
+  * "tomorrow EOD", "by tomorrow EOD", "friday EOD", "monday EOD"
+  * "this week EOD", "next week EOD"
+- Handle ALL time of day expressions:
+  * "morning" = 9:00 AM, "early morning" = 7:00 AM, "late morning" = 11:00 AM
+  * "noon" = 12:00 PM, "lunch" = 12:30 PM, "afternoon" = 2:00 PM, "late afternoon" = 4:00 PM
+  * "evening" = 7:00 PM, "late evening" = 8:00 PM, "dinner" = 7:30 PM
+  * "night" = 9:00 PM, "late night" = 11:00 PM, "midnight" = 12:00 AM
+- Handle ALL combinations: "friday EOD", "tomorrow 3pm", "next monday morning", "Dec 25 10am", "today evening", "by tomorrow EOD"
+- Handle ALL relative expressions: "in 2 hours", "2 hours later", "after 2 hours", "2 hours from now", "within 2 hours"
+- Handle ALL week expressions: "this week", "next week", "week after next", "in 2 weeks", "end of week", "start of week"
+- Handle ALL month expressions: "next month", "end of month", "beginning of month", "month end", "EOM"
+- Handle ALL "by/till/until" patterns: "by 5pm", "till friday", "until tomorrow", "before EOD", "by tomorrow EOD"
+- Handle informal expressions: "asap", "soon", "later today", "shortly", "in a bit", "in a while"
+- Be SMART about context: "ETC: 2min" = 2 minutes from now, "ETC: today 5pm" = today at 5pm
+- If multiple times mentioned, extract the PRIMARY/MOST SPECIFIC one
+- If day AND time mentioned, extract BOTH: "friday 3pm" → "friday 3pm" (not just "friday" or just "3pm")
+- If date AND time mentioned, extract BOTH: "Dec 25 10am" → "Dec 25 10am"
+- PRESERVE EOD in deadline_text: "tomorrow EOD" should stay as "tomorrow EOD" not converted
+
+RESPONSE FORMAT (JSON only):
 {{
     "has_deadline": true/false,
-    "deadline_text": "extracted time/date portion",
+    "deadline_text": "COMPLETE extracted time/date (include day+date+time if all mentioned)",
     "confidence": 0.0-1.0,
-    "reason": "explanation of parsing"
+    "reason": "brief expert explanation",
+    "suggested_response": "expert, friendly, contextual confirmation message"
 }}
 
-Rules:
-1. Only return has_deadline=true if you're confident this is a legitimate ETC request
-2. Extract the time/date portion after "ETC:" or "ETC"
-3. Be very specific about deadline_text - include exactly what should be parsed
-4. Return has_deadline=false for normal conversations that happen to mention time words
+COMPREHENSIVE EXAMPLES (LEARN FROM ALL THESE - BE EXPERT):
 
-Examples:
-- "ETC: today 5 PM" → {{"has_deadline": true, "deadline_text": "today 5 PM", "confidence": 0.95}}
-- "ETC tomorrow 2pm" → {{"has_deadline": true, "deadline_text": "tomorrow 2pm", "confidence": 0.95}}
-- "can we meet today?" → {{"has_deadline": false, "deadline_text": "", "confidence": 0.9}}
-- "I'll finish this today" → {{"has_deadline": false, "deadline_text": "", "confidence": 0.9}}
+=== RELATIVE TIME EXAMPLES ===
+Input: "ETC: 2min"
+Output: {{"has_deadline": true, "deadline_text": "2 minutes", "confidence": 0.99, "reason": "Relative time - 2 minutes from now", "suggested_response": "Got it! I'll remind you in 2 minutes."}}
 
-Return only the JSON, no other text."""
+Input: "ETC: 30 mins"
+Output: {{"has_deadline": true, "deadline_text": "30 minutes", "confidence": 0.99, "reason": "Relative time - 30 minutes from now", "suggested_response": "Perfect! I'll remind you in 30 minutes."}}
 
-            headers = {
-                'Authorization': f'Bearer {self.deepseek_api_key}',
-                'Content-Type': 'application/json',
-            }
-            
-            data = {
-                'model': 'deepseek-chat',
-                'messages': [
-                    {
-                        'role': 'user',
-                        'content': prompt
+Input: "ETC: 5 hours"
+Output: {{"has_deadline": true, "deadline_text": "5 hours", "confidence": 0.99, "reason": "Relative time - 5 hours from now", "suggested_response": "Understood! I'll check back with you in 5 hours."}}
+
+Input: "ETC: in 2 hours"
+Output: {{"has_deadline": true, "deadline_text": "2 hours", "confidence": 0.99, "reason": "Relative time with 'in' prefix", "suggested_response": "Got it! I'll remind you in 2 hours."}}
+
+Input: "ETC: 2 days"
+Output: {{"has_deadline": true, "deadline_text": "2 days", "confidence": 0.99, "reason": "Relative time - 2 days from now", "suggested_response": "Understood! I'll remind you in 2 days."}}
+
+Input: "ETC: half hour"
+Output: {{"has_deadline": true, "deadline_text": "30 minutes", "confidence": 0.98, "reason": "Half hour = 30 minutes", "suggested_response": "Got it! I'll remind you in 30 minutes."}}
+
+=== EOD EXAMPLES (END OF DAY = 7:00 PM) ===
+Input: "ETC: EOD"
+Output: {{"has_deadline": true, "deadline_text": "EOD", "confidence": 0.99, "reason": "End of day - today at 7:00 PM", "suggested_response": "Noted! I'll remind you at end of day (7:00 PM)."}}
+
+Input: "ETC: by EOD"
+Output: {{"has_deadline": true, "deadline_text": "EOD", "confidence": 0.99, "reason": "By end of day - today at 7:00 PM", "suggested_response": "Got it! I'll remind you by end of day (7:00 PM)."}}
+
+Input: "ETC: tomorrow EOD"
+Output: {{"has_deadline": true, "deadline_text": "tomorrow EOD", "confidence": 0.99, "reason": "Tomorrow end of day - 7:00 PM", "suggested_response": "Perfect! I'll remind you tomorrow at end of day (7:00 PM)."}}
+
+Input: "ETC: by tomorrow EOD"
+Output: {{"has_deadline": true, "deadline_text": "tomorrow EOD", "confidence": 0.99, "reason": "By tomorrow end of day - 7:00 PM", "suggested_response": "Noted! I'll remind you by tomorrow end of day (7:00 PM)."}}
+
+Input: "ETC: friday EOD"
+Output: {{"has_deadline": true, "deadline_text": "friday EOD", "confidence": 0.99, "reason": "Friday end of day - 7:00 PM", "suggested_response": "Got it! I'll remind you Friday at end of day (7:00 PM)."}}
+
+Input: "ETC: monday EOD"
+Output: {{"has_deadline": true, "deadline_text": "monday EOD", "confidence": 0.99, "reason": "Monday end of day - 7:00 PM", "suggested_response": "Noted! I'll remind you Monday at end of day (7:00 PM)."}}
+
+Input: "ETC: end of day"
+Output: {{"has_deadline": true, "deadline_text": "EOD", "confidence": 0.99, "reason": "End of day - today at 7:00 PM", "suggested_response": "Got it! I'll remind you at end of day (7:00 PM)."}}
+
+Input: "ETC: till EOD"
+Output: {{"has_deadline": true, "deadline_text": "EOD", "confidence": 0.99, "reason": "Till end of day - 7:00 PM", "suggested_response": "Understood! I'll remind you at end of day (7:00 PM)."}}
+
+=== TODAY/TOMORROW EXAMPLES ===
+Input: "ETC: today 5pm"
+Output: {{"has_deadline": true, "deadline_text": "today 5pm", "confidence": 0.99, "reason": "Today at specific time", "suggested_response": "Got it! I'll remind you today at 5:00 PM."}}
+
+Input: "ETC: today evening"
+Output: {{"has_deadline": true, "deadline_text": "today evening", "confidence": 0.98, "reason": "Today evening - 7:00 PM", "suggested_response": "Understood! I'll remind you today evening (7:00 PM)."}}
+
+Input: "ETC: tomorrow 3pm"
+Output: {{"has_deadline": true, "deadline_text": "tomorrow 3pm", "confidence": 0.99, "reason": "Tomorrow at specific time", "suggested_response": "Perfect! I'll remind you tomorrow at 3:00 PM."}}
+
+Input: "ETC: tomorrow morning"
+Output: {{"has_deadline": true, "deadline_text": "tomorrow morning", "confidence": 0.99, "reason": "Tomorrow morning - 9:00 AM", "suggested_response": "Got it! I'll remind you tomorrow morning (9:00 AM)."}}
+
+Input: "ETC: tomorrow afternoon"
+Output: {{"has_deadline": true, "deadline_text": "tomorrow afternoon", "confidence": 0.99, "reason": "Tomorrow afternoon - 2:00 PM", "suggested_response": "Noted! I'll remind you tomorrow afternoon (2:00 PM)."}}
+
+Input: "ETC: tonight"
+Output: {{"has_deadline": true, "deadline_text": "tonight", "confidence": 0.99, "reason": "Tonight - 9:00 PM", "suggested_response": "Got it! I'll remind you tonight (9:00 PM)."}}
+
+=== DAY OF WEEK EXAMPLES ===
+Input: "ETC: friday 3pm"
+Output: {{"has_deadline": true, "deadline_text": "friday 3pm", "confidence": 0.99, "reason": "Friday at specific time", "suggested_response": "Perfect! I'll remind you Friday at 3:00 PM."}}
+
+Input: "ETC: next monday 10am"
+Output: {{"has_deadline": true, "deadline_text": "next monday 10am", "confidence": 0.99, "reason": "Next Monday at specific time", "suggested_response": "Excellent! I'll remind you next Monday at 10:00 AM."}}
+
+Input: "ETC: this friday afternoon"
+Output: {{"has_deadline": true, "deadline_text": "this friday afternoon", "confidence": 0.98, "reason": "This Friday afternoon - 2:00 PM", "suggested_response": "Noted! I'll remind you this Friday afternoon (2:00 PM)."}}
+
+Input: "ETC: wednesday morning"
+Output: {{"has_deadline": true, "deadline_text": "wednesday morning", "confidence": 0.99, "reason": "Wednesday morning - 9:00 AM", "suggested_response": "Got it! I'll remind you Wednesday morning (9:00 AM)."}}
+
+Input: "ETC: next week monday"
+Output: {{"has_deadline": true, "deadline_text": "next week monday", "confidence": 0.99, "reason": "Next week Monday - 9:00 AM", "suggested_response": "Perfect! I'll remind you next Monday (9:00 AM)."}}
+
+=== DATE EXAMPLES ===
+Input: "ETC: Dec 25 10am"
+Output: {{"has_deadline": true, "deadline_text": "Dec 25 10am", "confidence": 0.99, "reason": "Specific date with time", "suggested_response": "Perfect! I'll remind you December 25th at 10:00 AM."}}
+
+Input: "ETC: jan 15"
+Output: {{"has_deadline": true, "deadline_text": "jan 15", "confidence": 0.99, "reason": "Specific date", "suggested_response": "Noted! I'll remind you January 15th."}}
+
+Input: "ETC: 20th jan 5pm"
+Output: {{"has_deadline": true, "deadline_text": "20th jan 5pm", "confidence": 0.99, "reason": "Date with time", "suggested_response": "Got it! I'll remind you January 20th at 5:00 PM."}}
+
+=== BY/TILL/UNTIL EXAMPLES ===
+Input: "ETC: by 5pm"
+Output: {{"has_deadline": true, "deadline_text": "5pm", "confidence": 0.99, "reason": "By specific time today", "suggested_response": "Got it! I'll remind you by 5:00 PM."}}
+
+Input: "ETC: till friday"
+Output: {{"has_deadline": true, "deadline_text": "friday", "confidence": 0.99, "reason": "Till Friday", "suggested_response": "Noted! I'll remind you on Friday."}}
+
+Input: "ETC: until tomorrow"
+Output: {{"has_deadline": true, "deadline_text": "tomorrow", "confidence": 0.99, "reason": "Until tomorrow", "suggested_response": "Got it! I'll remind you tomorrow."}}
+
+=== NOT ETC EXAMPLES ===
+Input: "can we meet today?"
+Output: {{"has_deadline": false, "deadline_text": "", "confidence": 0.95, "reason": "Question without ETC format", "suggested_response": ""}}
+
+Input: "I'll finish this by tomorrow"
+Output: {{"has_deadline": false, "deadline_text": "", "confidence": 0.95, "reason": "Statement without ETC format", "suggested_response": ""}}
+
+Input: "Let's discuss EOD plans"
+Output: {{"has_deadline": false, "deadline_text": "", "confidence": 0.95, "reason": "Discussion without ETC format", "suggested_response": ""}}
+
+CRITICAL INSTRUCTIONS:
+- Be AGGRESSIVE in detection - if ETC is mentioned, extract EVERYTHING
+- Include ALL parts: if both day AND time mentioned, extract BOTH
+- Normalize but preserve meaning: "2min" → "2 minutes", "tomorrow 3pm" → "tomorrow 3pm"
+- Confidence should be HIGH (0.95+) for clear ETC requests
+- Only return has_deadline=false if absolutely certain it's NOT an ETC request
+- Return ONLY valid JSON, no markdown, no code blocks, no explanations outside JSON"""
+
+            # Call Gemini API with error handling
+            try:
+                response = self.gemini_client.generate_content(
+                    prompt,
+                    generation_config={
+                        'temperature': self.gemini_temperature,
+                        'max_output_tokens': 2048,
                     }
-                ],
-                'max_tokens': self.deepseek_max_tokens,
-                'temperature': self.deepseek_temperature,
-                'stream': False
-            }
-            
-            response = requests.post(
-                f'{self.deepseek_api_base}/chat/completions',
-                headers=headers,
-                json=data,
-                timeout=self.deepseek_timeout
-            )
-            
-            if response.status_code == 200:
-                result = response.json()
-                content = result['choices'][0]['message']['content'].strip()
-                
-                # Try to parse JSON from response
-                try:
-                    # Remove any markdown formatting
-                    if content.startswith('```json'):
-                        content = content[7:]
-                    if content.endswith('```'):
-                        content = content[:-3]
-                    content = content.strip()
-                    
-                    parsed_result = json.loads(content)
-                    print(f"DeepSeek API response: {parsed_result}")
-                    return parsed_result
-                    
-                except json.JSONDecodeError as e:
-                    print(f"Failed to parse DeepSeek JSON response: {e}")
-                    print(f"Raw content: {content}")
+                )
+
+                if not response or not response.text:
+                    print("Gemini API returned empty response")
                     return None
-            else:
-                print(f"DeepSeek API error: {response.status_code} - {response.text}")
+
+                content = response.text.strip()
+            except Exception as api_error:
+                print(f"Error calling Gemini API: {api_error}")
                 return None
-                
+
+            # Try to parse JSON from response
+            try:
+                # Remove any markdown formatting
+                if '```json' in content:
+                    content = content.split('```json')[1].split('```')[0].strip()
+                elif '```' in content:
+                    content = content.split('```')[1].split('```')[0].strip()
+
+                # Try to extract JSON if there's extra text
+                json_match = re.search(r'\{[^{}]*\}', content, re.DOTALL)
+                if json_match:
+                    content = json_match.group(0)
+
+                parsed_result = json.loads(content)
+                print(f"Gemini API response: {parsed_result}")
+                return parsed_result
+
+            except json.JSONDecodeError as e:
+                print(f"Failed to parse Gemini JSON response: {e}")
+                print(f"Raw content: {content}")
+                # Try to extract just the JSON part
+                try:
+                    json_match = re.search(r'\{.*\}', content, re.DOTALL)
+                    if json_match:
+                        parsed_result = json.loads(json_match.group(0))
+                        print(f"Extracted JSON: {parsed_result}")
+                        return parsed_result
+                except:
+                    pass
+                return None
+
         except Exception as e:
-            print(f"Error calling DeepSeek API: {e}")
+            print(f"Error calling Gemini API: {e}")
+            import traceback
+            traceback.print_exc()
             return None
 
     def _detect_deadline_text(self, message: str) -> Optional[str]:
@@ -422,14 +664,54 @@ Return only the JSON, no other text."""
         # Handle common time expressions first
         date_text_lower = date_text.lower().strip()
 
-        # EOD and work-related expressions - 6 PM
-        eod_expressions = ['eod', 'end of day', 'end of work', 'close of business', 'cob']
-        if any(expr in date_text_lower for expr in eod_expressions):
-            today = now.replace(hour=18, minute=0, second=0, microsecond=0)
-            if today <= now:
-                today += timedelta(days=1)
-            print(f"EOD parsed: {today}")
-            return today
+        # EOD and work-related expressions - 7 PM (office hours)
+        eod_expressions = [
+            'eod', 'end of day', 'end of work', 'close of business', 'cob',
+            'by eod', 'till eod', 'until eod', 'before eod',
+            'end of business', 'eob', 'close of day', 'cod'
+        ]
+
+        # Check if message contains EOD expression
+        has_eod = any(expr in date_text_lower for expr in eod_expressions)
+
+        if has_eod:
+            # Check if there's a day mentioned with EOD (e.g., "tomorrow EOD", "friday EOD")
+            day_with_eod = None
+
+            # Check for "tomorrow EOD" or "by tomorrow EOD"
+            if 'tomorrow' in date_text_lower:
+                day_with_eod = now + timedelta(days=1)
+            # Check for "today EOD"
+            elif 'today' in date_text_lower:
+                day_with_eod = now
+            # Check for day of week with EOD (e.g., "friday EOD", "monday EOD")
+            else:
+                day_mappings = {
+                    'monday': 0, 'tuesday': 1, 'wednesday': 2, 'thursday': 3,
+                    'friday': 4, 'saturday': 5, 'sunday': 6
+                }
+                for day_name, day_num in day_mappings.items():
+                    if day_name in date_text_lower:
+                        current_weekday = now.weekday()
+                        days_ahead = (day_num - current_weekday) % 7
+                        if days_ahead == 0:  # Same day
+                            # If it's already past 7PM, go to next week
+                            if now.hour >= 19:
+                                days_ahead = 7
+                        day_with_eod = now + timedelta(days=days_ahead)
+                        break
+
+            if day_with_eod:
+                target_date = day_with_eod.replace(hour=19, minute=0, second=0, microsecond=0)
+            else:
+                # Just "EOD" means today at 7PM
+                target_date = now.replace(hour=19, minute=0, second=0, microsecond=0)
+
+            if target_date <= now:
+                target_date += timedelta(days=1)
+
+            print(f"EOD parsed: {target_date}")
+            return target_date
 
         # Handle days of the week
         day_mappings = {
@@ -788,38 +1070,53 @@ Return only the JSON, no other text."""
                         minute = int(time_match_24.group(2)) if time_match_24.group(2) else 0
                         target_date = target_date.replace(hour=hour, minute=minute, second=0, microsecond=0)
                     else:
-                        # Default to 6 PM for specific dates
-                        target_date = target_date.replace(hour=18, minute=0, second=0, microsecond=0)
+                        # Default to 7 PM for specific dates (office hours)
+                        target_date = target_date.replace(hour=19, minute=0, second=0, microsecond=0)
 
                 print(f"Till {day} {month_name} parsed: {target_date}")
                 return target_date
 
-        # Handle week expressions first
-        if 'this week' in date_text_lower or 'coming week' in date_text_lower:
+        # Handle week expressions - comprehensive patterns
+        week_expressions = {
+            'this week': 0,
+            'coming week': 0,
+            'next week': 7,
+            'week after next': 14,
+            'next to next week': 14,
+            'next-to-next week': 14,
+            'after next week': 14,
+        }
+
+        week_found = False
+        week_offset = 0
+
+        for week_expr, offset in week_expressions.items():
+            if week_expr in date_text_lower:
+                week_offset = offset
+                week_found = True
+                print(f"Found week expression: {week_expr} (offset: {offset} days)")
+                break
+
+        if week_found:
             # Find day of week in the text
             for day_name, day_num in day_mappings.items():
                 if day_name in date_text_lower:
                     current_weekday = now.weekday()
                     days_ahead = (day_num - current_weekday) % 7
-                    if days_ahead == 0:  # If it's the same day, use today
-                        days_ahead = 0
-                    target_date = now + timedelta(days=days_ahead)
-                    break
-        elif 'next week' in date_text_lower:
-            # Find day of week in the text
-            for day_name, day_num in day_mappings.items():
-                if day_name in date_text_lower:
-                    current_weekday = now.weekday()
-                    days_ahead = (day_num - current_weekday) % 7 + 7  # Add 7 for next week
-                    target_date = now + timedelta(days=days_ahead)
-                    break
-        elif 'next-to-next' in date_text_lower or 'next to next' in date_text_lower or 'after next' in date_text_lower:
-            # Find day of week in the text for next-to-next week
-            for day_name, day_num in day_mappings.items():
-                if day_name in date_text_lower:
-                    current_weekday = now.weekday()
-                    days_ahead = (day_num - current_weekday) % 7 + 14  # Add 14 for next-to-next week
-                    target_date = now + timedelta(days=days_ahead)
+
+                    # If same day and we're in "this week", use today if time hasn't passed
+                    if days_ahead == 0 and week_offset == 0:
+                        # Check if there's a time specified
+                        time_in_text = re.search(r'(\d{1,2})(?::(\d{2}))?\s*(am|pm)', date_text_lower)
+                        if time_in_text or 'morning' in date_text_lower or 'evening' in date_text_lower or 'afternoon' in date_text_lower:
+                            days_ahead = 0  # Use today
+                        else:
+                            days_ahead = 7  # If no time, assume next week
+                    elif days_ahead == 0:
+                        days_ahead = 7  # If same day but "next week", go to next week
+
+                    target_date = now + timedelta(days=days_ahead + week_offset)
+                    print(f"Week expression parsed: {day_name} in {week_offset} days = {target_date}")
                     break
         else:
             # Check for day of week patterns
@@ -1017,36 +1314,66 @@ Return only the JSON, no other text."""
         if 'today' in date_text_lower:
             target_date = now
 
-            # Extract time from the text if present
-            time_match = re.search(r'(\d{1,2})(?::(\d{2}))?\s*(am|pm)', date_text_lower)
-            if time_match:
-                hour = int(time_match.group(1))
-                minute = int(time_match.group(2)) if time_match.group(2) else 0
-                period = time_match.group(3)
+            # Check for time of day expressions (office hours: evening/EOD = 7PM)
+            time_mappings = {
+                'early morning': 7,
+                'morning': 9,
+                'late morning': 11,
+                'noon': 12,
+                'lunch': 12,
+                'afternoon': 14,
+                'late afternoon': 16,
+                'evening': 19,        # 7 PM - office hours
+                'late evening': 20,
+                'dinner': 19,
+                'night': 21,
+                'late night': 23,
+                'midnight': 0,
+            }
 
-                # Convert to 24-hour format
-                if period == 'pm' and hour != 12:
-                    hour += 12
-                elif period == 'am' and hour == 12:
-                    hour = 0
+            time_found = False
+            for time_expr in sorted(time_mappings.keys(), key=len, reverse=True):
+                if time_expr in date_text_lower:
+                    target_date = target_date.replace(hour=time_mappings[time_expr], minute=0, second=0, microsecond=0)
+                    time_found = True
+                    if target_date <= now:
+                        target_date += timedelta(days=1)
+                    break
 
-                target_date = target_date.replace(hour=hour, minute=minute, second=0, microsecond=0)
-                if target_date <= now:
-                    target_date += timedelta(days=1)
-            else:
-                # Check for time without AM/PM
-                time_match_24 = re.search(r'(\d{1,2})(?::(\d{2}))?', date_text_lower)
-                if time_match_24:
-                    hour = int(time_match_24.group(1))
-                    minute = int(time_match_24.group(2)) if time_match_24.group(2) else 0
+            if not time_found:
+                # Extract time from the text if present
+                time_match = re.search(r'(\d{1,2})(?::(\d{2}))?\s*(am|pm)', date_text_lower)
+                if time_match:
+                    hour = int(time_match.group(1))
+                    minute = int(time_match.group(2)) if time_match.group(2) else 0
+                    period = time_match.group(3)
+
+                    # Convert to 24-hour format
+                    if period == 'pm' and hour != 12:
+                        hour += 12
+                    elif period == 'am' and hour == 12:
+                        hour = 0
+
                     target_date = target_date.replace(hour=hour, minute=minute, second=0, microsecond=0)
                     if target_date <= now:
                         target_date += timedelta(days=1)
                 else:
-                    # Default to 6 PM today
-                    target_date = target_date.replace(hour=18, minute=0, second=0, microsecond=0)
-                    if target_date <= now:
-                        target_date += timedelta(days=1)
+                    # Check for time without AM/PM
+                    time_match_24 = re.search(r'(\d{1,2})(?::(\d{2}))?', date_text_lower)
+                    if time_match_24:
+                        hour = int(time_match_24.group(1))
+                        minute = int(time_match_24.group(2)) if time_match_24.group(2) else 0
+                        # Smart AM/PM inference
+                        if 1 <= hour <= 11:
+                            hour = hour + 12  # Assume PM
+                        target_date = target_date.replace(hour=hour, minute=minute, second=0, microsecond=0)
+                        if target_date <= now:
+                            target_date += timedelta(days=1)
+                    else:
+                        # Default to 7 PM today (office hours)
+                        target_date = target_date.replace(hour=19, minute=0, second=0, microsecond=0)
+                        if target_date <= now:
+                            target_date += timedelta(days=1)
 
             print(f"Today parsed: {target_date}")
             return target_date
@@ -1054,20 +1381,30 @@ Return only the JSON, no other text."""
         if 'tomorrow' in date_text_lower:
             target_date = now + timedelta(days=1)
 
-            # Check for time of day expressions first
+            # Comprehensive time of day mappings (office hours: evening/EOD = 7PM)
             time_mappings = {
+                'early morning': 7,
                 'morning': 9,
+                'late morning': 11,
                 'noon': 12,
-                'evening': 18,
+                'lunch': 12,
+                'afternoon': 14,
+                'late afternoon': 16,
+                'evening': 19,        # 7 PM - office hours
+                'late evening': 20,
+                'dinner': 19,
                 'night': 21,
-                'midnight': 0
+                'late night': 23,
+                'midnight': 0,
             }
 
             time_found = False
-            for time_expr, hour in time_mappings.items():
+            # Check for time expressions (longer first to match "late evening" before "evening")
+            for time_expr in sorted(time_mappings.keys(), key=len, reverse=True):
                 if time_expr in date_text_lower:
-                    target_date = target_date.replace(hour=hour, minute=0, second=0, microsecond=0)
+                    target_date = target_date.replace(hour=time_mappings[time_expr], minute=0, second=0, microsecond=0)
                     time_found = True
+                    print(f"Found time expression: {time_expr}")
                     break
 
             if not time_found:
@@ -1091,6 +1428,9 @@ Return only the JSON, no other text."""
                     if time_match_24:
                         hour = int(time_match_24.group(1))
                         minute = int(time_match_24.group(2)) if time_match_24.group(2) else 0
+                        # Smart AM/PM inference
+                        if 1 <= hour <= 11:
+                            hour = hour + 12  # Assume PM for afternoon times
                         target_date = target_date.replace(hour=hour, minute=minute, second=0, microsecond=0)
                     else:
                         # Default to 9 AM tomorrow
@@ -1141,29 +1481,37 @@ Return only the JSON, no other text."""
             print(f"Time expression parsed: {target_time}")
             return target_time
 
-        # Handle relative time expressions
-        relative_match = re.search(r'(\d+)\s+(seconds?|secs?|minutes?|mins?|hours?|hrs?|days?|weeks?|months?)', date_text, re.IGNORECASE)
-        if relative_match:
-            amount = int(relative_match.group(1))
-            unit = relative_match.group(2).lower()
+        # Handle relative time expressions - comprehensive patterns
+        relative_patterns = [
+            r'(\d+)\s+(seconds?|secs?|minutes?|mins?|hours?|hrs?|days?|weeks?|months?)',
+            r'in\s+(\d+)\s+(seconds?|secs?|minutes?|mins?|hours?|hrs?|days?|weeks?|months?)',
+            r'(\d+)\s+(seconds?|secs?|minutes?|mins?|hours?|hrs?|days?|weeks?|months?)\s+(from\s+now|later)',
+            r'(\d+)(min|mins|hour|hours|hr|hrs|day|days|week|weeks)',  # No space: "2min", "5hours"
+        ]
 
-            if unit in ['second', 'seconds', 'sec', 'secs']:
-                future_time = now + timedelta(seconds=amount)
-            elif unit in ['minute', 'minutes', 'min', 'mins']:
-                future_time = now + timedelta(minutes=amount)
-            elif unit in ['hour', 'hours', 'hr', 'hrs']:
-                future_time = now + timedelta(hours=amount)
-            elif unit in ['day', 'days']:
-                future_time = now + timedelta(days=amount)
-            elif unit in ['week', 'weeks']:
-                future_time = now + timedelta(weeks=amount)
-            elif unit in ['month', 'months']:
-                future_time = now + timedelta(days=amount * 30)
-            else:
-                return None
+        for pattern in relative_patterns:
+            relative_match = re.search(pattern, date_text, re.IGNORECASE)
+            if relative_match:
+                amount = int(relative_match.group(1))
+                unit = relative_match.group(2).lower() if len(relative_match.groups()) >= 2 else relative_match.group(2).lower()
 
-            print(f"Relative time parsed: {future_time}")
-            return future_time
+                if 'second' in unit or 'sec' in unit:
+                    future_time = now + timedelta(seconds=amount)
+                elif 'minute' in unit or 'min' in unit:
+                    future_time = now + timedelta(minutes=amount)
+                elif 'hour' in unit or 'hr' in unit:
+                    future_time = now + timedelta(hours=amount)
+                elif 'day' in unit:
+                    future_time = now + timedelta(days=amount)
+                elif 'week' in unit:
+                    future_time = now + timedelta(weeks=amount)
+                elif 'month' in unit:
+                    future_time = now + timedelta(days=amount * 30)
+                else:
+                    continue
+
+                print(f"Relative time parsed: {future_time}")
+                return future_time
 
         # Handle specific date patterns (e.g., "2nd Oct", "15th Dec", "Oct 2")
         # Pattern 1: "2nd Oct" format
@@ -1381,7 +1729,7 @@ Return only the JSON, no other text."""
         if not self._is_etc_format(message):
             print("Message does not contain ETC format - skipping")
             return None
-            
+
         print("ETC format detected - proceeding with deadline analysis")
 
         # Check if this is a contextual request (again, same, repeat, etc.)
@@ -1402,34 +1750,108 @@ Return only the JSON, no other text."""
                 print("No user history found, extracting from current message")
                 deadline_text = self._extract_etc_content(message)
         else:
-            # Use DeepSeek API for intelligent deadline detection
-            deepseek_result = self._call_deepseek_api(message)
-            
-            if deepseek_result and deepseek_result.get('has_deadline', False):
-                confidence = deepseek_result.get('confidence', 0.0)
-                if confidence >= 0.7:  # Only proceed if confidence is high enough
-                    deadline_text = deepseek_result.get('deadline_text', '')
-                    print(f"DeepSeek detected deadline: '{deadline_text}' (confidence: {confidence})")
+            # Use Gemini API for intelligent deadline detection (if available)
+            user_history = self._get_user_last_etc(user_id)
+            gemini_result = None
+
+            if self.gemini_client:
+                gemini_result = self._call_gemini_api(message, user_history)
+
+            # Multi-strategy approach: Try Gemini first, then fallback to regex
+            deadline_text = None
+
+            if gemini_result and gemini_result.get('has_deadline', False):
+                confidence = gemini_result.get('confidence', 0.0)
+                if confidence >= 0.6:  # Lower threshold for more aggressive detection
+                    deadline_text = gemini_result.get('deadline_text', '')
+                    suggested_response = gemini_result.get('suggested_response', '')
+                    print(f"✅ Gemini detected deadline: '{deadline_text}' (confidence: {confidence})")
+
+                    # Store suggested response for later use
+                    if suggested_response:
+                        self._last_suggested_response = suggested_response
                 else:
-                    print(f"DeepSeek confidence too low: {confidence}")
-                    return None
-            else:
-                print("DeepSeek did not detect a valid deadline")
-                # Fallback to manual extraction if DeepSeek fails
+                    print(f"⚠️  Gemini confidence too low: {confidence}, trying fallback")
+
+            # Fallback to manual extraction if Gemini didn't work
+            if not deadline_text:
+                print("🔄 Using regex-based extraction as fallback")
                 deadline_text = self._extract_etc_content(message)
+
+                # If still no text, try more aggressive extraction
                 if not deadline_text:
-                    print("No deadline text found even in fallback")
+                    # Try to extract anything after ETC
+                    aggressive_match = re.search(r'ETC[:\s\-=\(]*(.+)', message, re.IGNORECASE)
+                    if aggressive_match:
+                        deadline_text = aggressive_match.group(1).strip()
+                        # Clean up
+                        deadline_text = re.sub(r'[.,;!?]+$', '', deadline_text).strip()
+                        print(f"🔄 Aggressive extraction found: '{deadline_text}'")
+
+                if not deadline_text:
+                    print("❌ No deadline text found in any extraction method")
                     return None
 
         if not deadline_text:
-            print("No ETC text detected")
+            print("❌ No ETC text detected")
             return None
 
-        # Parse the datetime
+        print(f"📅 Parsing deadline text: '{deadline_text}'")
+
+        # Multi-strategy datetime parsing
+        due_at = None
+
+        # Strategy 1: Try comprehensive regex parsing
         due_at = self._parse_datetime(deadline_text)
+
+        # Strategy 2: If regex fails, try dateparser
         if not due_at:
-            print("Failed to parse ETC datetime")
+            print("🔄 Regex parsing failed, trying dateparser...")
+            try:
+                parsed_date = dateparser.parse(deadline_text, settings={
+                    'TIMEZONE': str(self.timezone),
+                    'RETURN_AS_TIMEZONE_AWARE': True,
+                    'PREFER_DATES_FROM': 'future',
+                    'RELATIVE_BASE': datetime.now(self.timezone)
+                })
+
+                if parsed_date:
+                    if parsed_date.tzinfo is None:
+                        parsed_date = self.timezone.localize(parsed_date)
+
+                    now = datetime.now(self.timezone)
+                    if parsed_date > now:
+                        due_at = parsed_date
+                        print(f"✅ Dateparser parsed: {due_at}")
+            except Exception as e:
+                print(f"⚠️  Dateparser error: {e}")
+
+        # Strategy 3: If still no date, try to extract just the time/relative part
+        if not due_at:
+            print("🔄 Trying to extract time/relative component...")
+            # Try to find just time or relative expression
+            time_match = re.search(r'(\d+)\s*(min|mins|minute|minutes|hour|hours|day|days)', deadline_text, re.IGNORECASE)
+            if time_match:
+                amount = int(time_match.group(1))
+                unit = time_match.group(2).lower()
+                now = datetime.now(self.timezone)
+
+                if 'min' in unit:
+                    due_at = now + timedelta(minutes=amount)
+                elif 'hour' in unit:
+                    due_at = now + timedelta(hours=amount)
+                elif 'day' in unit:
+                    due_at = now + timedelta(days=amount)
+
+                if due_at:
+                    print(f"✅ Relative time parsed: {due_at}")
+
+        if not due_at:
+            print(f"❌ Failed to parse datetime from: '{deadline_text}'")
+            print("   Tried: regex patterns, dateparser, relative time extraction")
             return None
+
+        print(f"✅ Successfully parsed deadline: {deadline_text} → {due_at}")
 
         # Create reminder
         reminder_id = str(uuid.uuid4())
@@ -1463,6 +1885,12 @@ Return only the JSON, no other text."""
 
         print(f"ETC reminder created: {deadline_text} -> {due_at}")
         return reminder
+
+    def get_suggested_response(self) -> Optional[str]:
+        """Get the last suggested response from Gemini API"""
+        response = self._last_suggested_response
+        self._last_suggested_response = None  # Clear after use
+        return response
 
     def get_reminder(self, reminder_id: str) -> Optional[Reminder]:
         """Retrieve a specific reminder by ID"""

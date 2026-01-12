@@ -218,11 +218,24 @@ def handle_message_events(body, event, say, logger):
                             else:
                                 deadline_str = local_time.strftime('%b %d at %I:%M %p')
 
-                        # Send confirmation
-                        if is_update:
-                            response_text = f"ETC updated for <@{user}> to {deadline_str}"
+                        # Try to get intelligent response from Gemini, fallback to default
+                        suggested_response = deadline_agent.get_suggested_response()
+
+                        if suggested_response:
+                            # Use Gemini's intelligent response, but personalize it
+                            response_text = suggested_response
+                            # Replace generic mentions with actual user mention if needed
+                            if '<@user>' in response_text or 'you' in response_text.lower():
+                                response_text = response_text.replace('<@user>', f'<@{user}>')
+                                response_text = response_text.replace('you', f'<@{user}>', 1)
+                            print(f"Using Gemini suggested response: {response_text}")
                         else:
-                            response_text = f"ETC confirmed for <@{user}> at {deadline_str}"
+                            # Fallback to default response
+                            if is_update:
+                                response_text = f"ETC updated for <@{user}> to {deadline_str}"
+                            else:
+                                response_text = f"ETC confirmed for <@{user}> at {deadline_str}"
+                            print(f"Using default response: {response_text}")
 
                         print(f"Sending response: {response_text}")
                         app.client.chat_postMessage(
@@ -334,21 +347,30 @@ def handle_message_events(body, event, say, logger):
 
             print(f"Display time: {deadline_str}")
 
-            # Confirm in thread with update status
-            if is_update:
-                response_text = f"ETC updated for <@{user}> to {deadline_str}"
-                print(f"Sending update response: {response_text}")
-                say(
-                    text=response_text,
-                    thread_ts=thread_ts
-                )
+            # Try to get intelligent response from Gemini, fallback to default
+            suggested_response = deadline_agent.get_suggested_response()
+
+            if suggested_response:
+                # Use Gemini's intelligent response, but personalize it
+                response_text = suggested_response
+                # Replace generic mentions with actual user mention if needed
+                if '<@user>' in response_text or 'you' in response_text.lower():
+                    response_text = response_text.replace('<@user>', f'<@{user}>')
+                    response_text = response_text.replace('you', f'<@{user}>', 1)
+                print(f"Using Gemini suggested response: {response_text}")
             else:
-                response_text = f"ETC confirmed for <@{user}> at {deadline_str}"
-                print(f"Sending confirmation response: {response_text}")
-                say(
-                    text=response_text,
-                    thread_ts=thread_ts
-                )
+                # Fallback to default response
+                if is_update:
+                    response_text = f"ETC updated for <@{user}> to {deadline_str}"
+                else:
+                    response_text = f"ETC confirmed for <@{user}> at {deadline_str}"
+                print(f"Using default response: {response_text}")
+
+            # Send the response
+            say(
+                text=response_text,
+                thread_ts=thread_ts
+            )
         else:
             print("No ETC detected")
 

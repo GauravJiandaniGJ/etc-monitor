@@ -81,6 +81,68 @@ def format_datetime(datetime_str):
         print(f"Error formatting datetime {datetime_str}: {e}")
         return datetime_str
 
+def is_reminder_expired(due_at_str):
+    """Check if a reminder has expired based on due_at"""
+    try:
+        local_tz = pytz.timezone('Asia/Kolkata')
+        now = datetime.now(local_tz)
+
+        # Parse the datetime string
+        due_at = datetime.fromisoformat(due_at_str.replace('Z', '+00:00'))
+
+        # Ensure timezone awareness
+        if due_at.tzinfo is None:
+            due_at = local_tz.localize(due_at)
+        else:
+            due_at = due_at.astimezone(local_tz)
+
+        return due_at <= now
+    except Exception as e:
+        print(f"Error checking if reminder expired: {e}")
+        return False
+
+def mark_expired_reminders_inactive():
+    """Automatically mark expired reminders as inactive"""
+    try:
+        conn = get_db_connection()
+        local_tz = pytz.timezone('Asia/Kolkata')
+        now = datetime.now(local_tz)
+
+        # Get all active reminders
+        reminders = conn.execute('''
+            SELECT id, due_at FROM reminders
+            WHERE is_active = 1
+        ''').fetchall()
+
+        expired_count = 0
+        for reminder in reminders:
+            try:
+                due_at_str = reminder['due_at']
+                due_at = datetime.fromisoformat(due_at_str.replace('Z', '+00:00'))
+
+                # Ensure timezone awareness
+                if due_at.tzinfo is None:
+                    due_at = local_tz.localize(due_at)
+                else:
+                    due_at = due_at.astimezone(local_tz)
+
+                # If due date has passed, mark as inactive
+                if due_at <= now:
+                    conn.execute('UPDATE reminders SET is_active = 0 WHERE id = ?', (reminder['id'],))
+                    expired_count += 1
+            except Exception as e:
+                print(f"Error processing reminder {reminder['id']}: {e}")
+                continue
+
+        conn.commit()
+        conn.close()
+
+        if expired_count > 0:
+            print(f"Marked {expired_count} expired reminders as inactive")
+
+    except Exception as e:
+        print(f"Error marking expired reminders: {e}")
+
 # Database helper functions
 def get_db_connection():
     conn = sqlite3.connect('reminders.db')
@@ -343,6 +405,7 @@ HTML_TEMPLATE = '''
         .stat-icon.primary { background: #dbeafe; color: var(--primary); }
         .stat-icon.success { background: #d1fae5; color: var(--success); }
         .stat-icon.warning { background: #fef3c7; color: var(--warning); }
+        .stat-icon.danger { background: #fee2e2; color: var(--danger); }
 
         .stat-value {
             font-size: 2rem;
@@ -492,6 +555,11 @@ HTML_TEMPLATE = '''
             color: var(--warning);
         }
 
+        .status-badge.failed {
+            background: rgba(239, 68, 68, 0.1);
+            color: var(--danger);
+        }
+
         .status-dot {
             width: 6px;
             height: 6px;
@@ -501,6 +569,7 @@ HTML_TEMPLATE = '''
         .status-dot.active { background: var(--success); }
         .status-dot.inactive { background: var(--danger); }
         .status-dot.expired { background: var(--warning); }
+        .status-dot.failed { background: var(--danger); }
 
         .message-preview {
             max-width: 300px;
@@ -678,10 +747,17 @@ HTML_TEMPLATE = '''
                 </div>
                 <div class="stat-card">
                     <div class="stat-header">
-                        <span class="stat-title">Expired Reminders</span>
+                        <span class="stat-title">Completed Reminders</span>
                         <div class="stat-icon warning">⏰</div>
                     </div>
-                    <div class="stat-value">{{ expired_reminders }}</div>
+                    <div class="stat-value">{{ completed_reminders }}</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-header">
+                        <span class="stat-title">Failed Reminders</span>
+                        <div class="stat-icon danger">❌</div>
+                    </div>
+                    <div class="stat-value">{{ failed_reminders }}</div>
                 </div>
             </div>
 
@@ -728,7 +804,19 @@ HTML_TEMPLATE = '''
                                             <span class="time-stamp">{{ format_datetime(reminder.due_at) }}</span>
                                         </td>
                                         <td>
-                                            {% if reminder.is_active == 1 %}
+                                            {% if is_reminder_expired(reminder.due_at) %}
+                                                {% if reminder.is_active == 1 %}
+                                                    <span class="status-badge failed">
+                                                        <span class="status-dot failed"></span>
+                                                        Failed
+                                                    </span>
+                                                {% else %}
+                                                    <span class="status-badge expired">
+                                                        <span class="status-dot expired"></span>
+                                                        Completed
+                                                    </span>
+                                                {% endif %}
+                                            {% elif reminder.is_active == 1 %}
                                                 <span class="status-badge active">
                                                     <span class="status-dot active"></span>
                                                     Active
@@ -954,23 +1042,60 @@ HTML_TEMPLATE = '''
 
 @app.route('/')
 def index():
+    # Mark expired reminders as inactive before loading
+    mark_expired_reminders_inactive()
+
     all_reminders = get_all_reminders()
     active_reminders_list = get_active_reminders()
 
-    # Calculate stats
+    # Calculate stats - distinguish between completed and failed reminders
+    local_tz = pytz.timezone('Asia/Kolkata')
+    now = datetime.now(local_tz)
+
     total_reminders = len(all_reminders)
-    active_reminders = len(active_reminders_list)
-    expired_reminders = total_reminders - active_reminders
+    active_count = 0
+    completed_count = 0
+    failed_count = 0
+
+    for reminder in all_reminders:
+        try:
+            due_at_str = reminder['due_at']
+            due_at = datetime.fromisoformat(due_at_str.replace('Z', '+00:00'))
+            if due_at.tzinfo is None:
+                due_at = local_tz.localize(due_at)
+            else:
+                due_at = due_at.astimezone(local_tz)
+
+            if due_at <= now:
+                # Reminder has expired
+                if reminder['is_active'] == 0:
+                    # Was properly completed/deactivated
+                    completed_count += 1
+                else:
+                    # Still marked as active but expired - this is a failed reminder
+                    failed_count += 1
+            elif reminder['is_active'] == 1:
+                # Still active and not expired
+                active_count += 1
+        except:
+            # If parsing fails, don't count it
+            pass
+
+    active_reminders = active_count
+    completed_reminders = completed_count
+    failed_reminders = failed_count
 
     return render_template_string(HTML_TEMPLATE,
                                 all_reminders=all_reminders,
                                 active_reminders_list=active_reminders_list,
                                 total_reminders=total_reminders,
                                 active_reminders=active_reminders,
-                                expired_reminders=expired_reminders,
+                                completed_reminders=completed_reminders,
+                                failed_reminders=failed_reminders,
                                 get_user_name=get_user_name,
                                 get_channel_name=get_channel_name,
-                                format_datetime=format_datetime)
+                                format_datetime=format_datetime,
+                                is_reminder_expired=is_reminder_expired)
 
 @app.route('/delete/<reminder_id>', methods=['POST'])
 def delete_reminder_route(reminder_id):
