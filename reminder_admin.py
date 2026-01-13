@@ -150,11 +150,19 @@ def get_db_connection():
     return conn
 
 def get_all_reminders():
+    import os
+    db_path = 'reminders.db'
+    abs_db_path = os.path.abspath(db_path)
+    print(f"📊 Reading reminders from: {abs_db_path}")
+    print(f"📊 Database exists: {os.path.exists(abs_db_path)}")
+
     conn = get_db_connection()
     reminders = conn.execute('''
         SELECT * FROM reminders
         ORDER BY created_at DESC
     ''').fetchall()
+
+    print(f"📊 Found {len(reminders)} reminders in database")
     conn.close()
     return reminders
 

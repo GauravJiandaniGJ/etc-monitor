@@ -313,28 +313,65 @@ class ReminderRepository:
         user_id: str
     ) -> Optional[Reminder]:
         """Find existing active reminder for same user in same thread.
-        
+
         Active means status is 'pending' or 'rescheduled'.
-        
+
         Args:
             channel_id: Slack channel ID
             thread_ts: Thread timestamp
             user_id: User ID
-            
+
         Returns:
             Active reminder or None
         """
         query = '''
-            SELECT * FROM reminders 
-            WHERE channel_id = ? 
-            AND thread_ts = ? 
+            SELECT * FROM reminders
+            WHERE channel_id = ?
+            AND thread_ts = ?
             AND user_id = ?
             AND status IN ('pending', 'rescheduled')
             ORDER BY created_at DESC
             LIMIT 1
         '''
         row = self.db.fetch_one(query, (channel_id, thread_ts, user_id))
-        
+
+        if row:
+            return self._row_to_reminder(row)
+        return None
+
+    def find_by_message(
+        self,
+        channel_id: str,
+        thread_ts: str,
+        user_id: str,
+        message_ts: str
+    ) -> Optional[Reminder]:
+        """Find reminder by message timestamp.
+
+        Uses message_ts as the unique identifier to determine if an ETC
+        is for a new task or an update to an existing task.
+
+        Args:
+            channel_id: Slack channel ID
+            thread_ts: Thread timestamp
+            user_id: User ID
+            message_ts: Message timestamp (unique identifier)
+
+        Returns:
+            Reminder for this specific message or None
+        """
+        query = '''
+            SELECT * FROM reminders
+            WHERE channel_id = ?
+            AND thread_ts = ?
+            AND user_id = ?
+            AND message_ts = ?
+            AND status IN ('pending', 'rescheduled')
+            ORDER BY created_at DESC
+            LIMIT 1
+        '''
+        row = self.db.fetch_one(query, (channel_id, thread_ts, user_id, message_ts))
+
         if row:
             return self._row_to_reminder(row)
         return None

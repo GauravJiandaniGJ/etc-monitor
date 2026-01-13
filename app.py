@@ -70,6 +70,9 @@ def send_reminder(channel, thread_ts, user_id, original_message):
     max_retries = 3
     retry_delay = 1
 
+    # Format the reminder message with original ETC text
+    reminder_text = f"<@{user_id}> Status!\n*ETC:* {original_message}"
+
     for attempt in range(max_retries):
         try:
             # Validate thread_ts before sending
@@ -77,13 +80,13 @@ def send_reminder(channel, thread_ts, user_id, original_message):
                 response = app.client.chat_postMessage(
                     channel=channel,
                     thread_ts=thread_ts,
-                    text=f"<@{user_id}> Status!"
+                    text=reminder_text
                 )
             else:
                 # Send as regular message if thread_ts is invalid
                 response = app.client.chat_postMessage(
                     channel=channel,
-                    text=f"<@{user_id}> Status!"
+                    text=reminder_text
                 )
 
             if response["ok"]:
@@ -140,7 +143,8 @@ def handle_message_events(body, event, say, logger):
 
         # Handle message editing events
         if event.get("subtype") == "message_changed":
-            print(f"Message edited: {event.get('ts')}")
+            event_ts = event.get('ts')
+            print(f"Message edited: event_ts={event_ts}")
             # Process the edited message as a new deadline
             edited_message = event.get("message", {})
             if edited_message:
@@ -150,26 +154,49 @@ def handle_message_events(body, event, say, logger):
                 user = edited_message.get("user")
                 thread_ts = edited_message.get("thread_ts")
 
-                if text and user and thread_ts:
-                    print(f"Processing edited message: '{text}' from user: {user}")
+                # IMPORTANT: When a message is edited, edited_message.ts is the ORIGINAL message timestamp
+                # This is what we use to find and UPDATE the existing reminder
+                message_ts = edited_message.get("ts")
 
-                    # Use DeadlineAgent to detect deadline
-                    message_ts = edited_message.get("ts", str(datetime.now().timestamp()))
+                if not message_ts:
+                    print("⚠️ No message_ts in edited message, skipping")
+                    return
+
+                if text and user and thread_ts:
+                    print(f"Processing edited message: '{text}' from user: {user}, message_ts: {message_ts}")
+                    print(f"   This should UPDATE existing reminder with message_ts={message_ts}")
+
+                    # Use DeadlineAgent to detect deadline - this will UPDATE if message_ts exists
                     reminder = deadline_agent.handle_message(text, user, channel, message_ts, thread_ts)
 
                     if reminder:
                         print(f"ETC found in edited message: {reminder.due_at}")
                         print(f"Matched text: {reminder.matched_text}")
 
+                        # Check if this was an update (reminder object has _was_update flag)
+                        is_update_msg = getattr(reminder, '_was_update', False)
+
+                        if is_update_msg:
+                            print(f"🔄 Detected UPDATE: Reminder for message_ts {message_ts} was updated")
+                        else:
+                            print(f"📝 Detected CREATE: New reminder for message_ts {message_ts}")
+
                         # Create unique job ID using message timestamp
-                        message_ts = edited_message.get("ts", str(datetime.now().timestamp()))
                         job_id = f"{channel}_{thread_ts}_{user}_{message_ts}"
 
-                        # Remove existing jobs for same user/thread
+                        # Remove existing jobs for same user/thread/message
                         existing_jobs = [job for job in scheduler.get_jobs()
-                                       if job.id.startswith(f"{channel}_{thread_ts}_{user}_")]
+                                       if job.id.startswith(f"{channel}_{thread_ts}_{user}_{message_ts}")]
 
-                        is_update = len(existing_jobs) > 0
+                        # Also remove jobs for same thread/user (in case of updates)
+                        if is_update_msg:
+                            all_thread_jobs = [job for job in scheduler.get_jobs()
+                                             if job.id.startswith(f"{channel}_{thread_ts}_{user}_")]
+                            for job in all_thread_jobs:
+                                if job.id != job_id:  # Don't remove the current job
+                                    scheduler.remove_job(job.id)
+                                    print(f"Removed existing job: {job.id}")
+
                         for job in existing_jobs:
                             scheduler.remove_job(job.id)
                             print(f"Removed existing job: {job.id}")
@@ -188,7 +215,7 @@ def handle_message_events(body, event, say, logger):
                             send_reminder,
                             'date',
                             run_date=reminder.due_at,
-                            args=[channel, thread_ts, user, text],
+                            args=[channel, thread_ts, user, reminder.original_text],
                             id=job_id
                         )
 
@@ -230,8 +257,8 @@ def handle_message_events(body, event, say, logger):
                                 response_text = response_text.replace('you', f'<@{user}>', 1)
                             print(f"Using Gemini suggested response: {response_text}")
                         else:
-                            # Fallback to default response
-                            if is_update:
+                            # Fallback to default response (no ETC text in confirmation)
+                            if is_update_msg:
                                 response_text = f"ETC updated for <@{user}> to {deadline_str}"
                             else:
                                 response_text = f"ETC confirmed for <@{user}> at {deadline_str}"
@@ -260,11 +287,14 @@ def handle_message_events(body, event, say, logger):
             print("Skipping bot message")
             return
 
-        # Check if it's a thread reply
+        # Check if it's a thread reply or regular message
         thread_ts = event.get("thread_ts")
         if not thread_ts:
-            print("Not a thread reply - skipping")
-            return
+            # For regular messages, use the message timestamp as thread_ts
+            thread_ts = event.get("ts")
+            print(f"Regular message detected - treating as new thread: {thread_ts}")
+        else:
+            print(f"Thread reply detected in thread: {thread_ts}")
 
         print(f"Thread reply detected in thread: {thread_ts}")
 
@@ -286,14 +316,19 @@ def handle_message_events(body, event, say, logger):
             message_ts = event.get("ts", str(datetime.now().timestamp()))
             job_id = f"{channel}_{thread_ts}_{user}_{message_ts}"
 
-            # Remove existing jobs for same user/thread
-            existing_jobs = [job for job in scheduler.get_jobs()
-                           if job.id.startswith(f"{channel}_{thread_ts}_{user}_")]
+            # Check if this is an update message
+            is_update_msg = any(keyword in text.lower() for keyword in ['update', 'change', 'modify', 'extend', 'postpone', 'delay', 'reschedule', 'move', 'shift', 'adjust'])
 
-            is_update = len(existing_jobs) > 0
-            for job in existing_jobs:
-                scheduler.remove_job(job.id)
-                print(f"Removed existing job: {job.id}")
+            # Only remove existing jobs if this is an update
+            if is_update_msg:
+                existing_jobs = [job for job in scheduler.get_jobs()
+                               if job.id.startswith(f"{channel}_{thread_ts}_{user}_")]
+
+                for job in existing_jobs:
+                    scheduler.remove_job(job.id)
+                    print(f"🔄 UPDATE: Removed existing job: {job.id}")
+            else:
+                print(f"📝 NEW ETC: Creating separate reminder in thread")
 
             # Check if the reminder is too close to now (less than 1 minute)
             current_time = datetime.now(local_tz)
@@ -309,7 +344,7 @@ def handle_message_events(body, event, say, logger):
                 send_reminder,
                 'date',
                 run_date=reminder.due_at,
-                args=[channel, thread_ts, user, text],
+                args=[channel, thread_ts, user, reminder.original_text],
                 id=job_id
             )
 
@@ -359,8 +394,8 @@ def handle_message_events(body, event, say, logger):
                     response_text = response_text.replace('you', f'<@{user}>', 1)
                 print(f"Using Gemini suggested response: {response_text}")
             else:
-                # Fallback to default response
-                if is_update:
+                # Fallback to default response (no ETC text in confirmation)
+                if is_update_msg:
                     response_text = f"ETC updated for <@{user}> to {deadline_str}"
                 else:
                     response_text = f"ETC confirmed for <@{user}> at {deadline_str}"

@@ -39,33 +39,40 @@ class ReminderService:
         deadline: ParsedDeadline
     ) -> Reminder:
         """Create new reminder or update existing one.
-        
-        If an active reminder exists for the same user in the same thread,
-        it will be rescheduled. Otherwise, a new reminder is created.
-        
+
+        Uses message_ts as the unique identifier to determine if this is:
+        - A new task/message (create new reminder)
+        - An update to existing task/message (update existing reminder)
+
+        This ensures:
+        - Multiple tasks in the same thread each get their own reminder
+        - Updates to the same task modify the existing reminder (no duplicates)
+
         Args:
             context: Reminder context from Slack message
             deadline: Parsed deadline information
-            
+
         Returns:
             Created or updated Reminder object
         """
-        logger.info(f'Creating or updating reminder for user {context.user_id} in thread {context.thread_ts}')
-        
-        # Check for existing active reminder
-        existing = self.reminder_repo.find_existing_active(
+        logger.info(f'Creating or updating reminder for user {context.user_id} in thread {context.thread_ts}, message {context.message_ts}')
+
+        # Check for existing reminder for THIS SPECIFIC MESSAGE
+        # Key insight: message_ts uniquely identifies the task
+        existing = self.reminder_repo.find_by_message(
             context.channel_id,
             context.thread_ts,
-            context.user_id
+            context.user_id,
+            context.message_ts
         )
-        
+
         if existing:
-            # Reschedule existing reminder
-            logger.info(f'Found existing reminder {existing.id}, rescheduling')
-            return self._reschedule_reminder(existing, deadline, context)
+            # UPDATE: This message already has a reminder - update it
+            logger.info(f'Found existing reminder {existing.id} for message {context.message_ts}, updating')
+            return self._update_reminder(existing, deadline, context)
         else:
-            # Create new reminder
-            logger.info('No existing reminder found, creating new')
+            # CREATE: This is a new message/task - create new reminder
+            logger.info(f'No existing reminder for message {context.message_ts}, creating new')
             return self._create_new_reminder(context, deadline)
     
     def _create_new_reminder(
@@ -118,60 +125,67 @@ class ReminderService:
         logger.success(f'Created reminder {reminder_id} for deadline: {format_datetime_friendly(deadline.deadline_datetime)}')
         return reminder
     
-    def _reschedule_reminder(
+    def _update_reminder(
         self,
         existing: Reminder,
         deadline: ParsedDeadline,
         context: ReminderContext
     ) -> Reminder:
-        """Reschedule an existing reminder.
-        
+        """Update an existing reminder for the same message/task.
+
+        This is called when a user updates the ETC for the same message.
+        E.g., "update task_1 ETC 5 mins" after previously setting "task_1 ETC 2 mins"
+
         Args:
-            existing: Existing reminder to reschedule
+            existing: Existing reminder to update
             deadline: New parsed deadline
             context: Message context
-            
+
         Returns:
             Updated Reminder object
         """
         old_deadline = existing.deadline_datetime
         old_deadline_text = existing.deadline_text
-        
-        # Update reminder
+
+        logger.info(f'Updating reminder {existing.id}: "{old_deadline_text}" -> "{deadline.original_text}"')
+
+        # Update reminder using reschedule method (preserves history)
         success = self.reminder_repo.reschedule(
             existing.id,
             deadline.deadline_datetime,
             deadline.reminder_datetime
         )
-        
+
         if not success:
-            logger.error(f'Failed to reschedule reminder {existing.id}')
-            raise Exception(f'Failed to reschedule reminder {existing.id}')
-        
-        # Also update deadline text and message
+            logger.error(f'Failed to update reminder {existing.id}')
+            raise Exception(f'Failed to update reminder {existing.id}')
+
+        # Also update deadline text and message content
         self.reminder_repo.update(existing.id, {
             'deadline_text': deadline.original_text,
             'original_message': context.message_text
         })
-        
-        # Log audit entry
+
+        # Log audit entry - use UPDATED action for same-message updates
         audit = AuditLog(
             reminder_id=existing.id,
-            action=AuditAction.RESCHEDULED,
+            action=AuditAction.UPDATED,
             field_changed='deadline',
             old_value=f'{old_deadline_text} ({format_datetime_friendly(old_deadline)})',
             new_value=f'{deadline.original_text} ({format_datetime_friendly(deadline.deadline_datetime)})',
             performed_by=context.user_id,
             performed_at=now_ist(),
             metadata={
+                'message_ts': context.message_ts,
                 'parsed_by': deadline.parsed_by,
-                'confidence': deadline.confidence
+                'confidence': deadline.confidence,
+                'update_type': 'same_message_update'
             }
         )
         self.audit_repo.log(audit)
-        
-        logger.success(f'Rescheduled reminder {existing.id}: {format_datetime_friendly(old_deadline)} -> {format_datetime_friendly(deadline.deadline_datetime)}')
-        
+
+        logger.success(f'Updated reminder {existing.id}: {format_datetime_friendly(old_deadline)} -> {format_datetime_friendly(deadline.deadline_datetime)}')
+
         # Return updated reminder
         return self.reminder_repo.get_by_id(existing.id)
     

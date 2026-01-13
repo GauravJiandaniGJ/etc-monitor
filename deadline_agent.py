@@ -1993,7 +1993,10 @@ CRITICAL INSTRUCTIONS:
         self.reminders[reminder_id] = reminder
 
         # Persist to database
-        self._save_reminder_to_db(reminder)
+        is_update = self._save_reminder_to_db(reminder)
+
+        # Store whether this was an update for later use
+        reminder._was_update = is_update
 
         # Save to user history for contextual understanding
         self._save_user_etc(user_id, {
@@ -2048,7 +2051,37 @@ CRITICAL INSTRUCTIONS:
                     due_at TEXT NOT NULL,
                     original_text TEXT NOT NULL,
                     created_at TEXT NOT NULL,
-                    is_active INTEGER DEFAULT 1
+                    updated_at TEXT,
+                    is_active INTEGER DEFAULT 1,
+                    UNIQUE(channel_id, thread_ts, user_id, message_ts)
+                )
+            ''')
+
+            # Add updated_at column if it doesn't exist (for existing databases)
+            try:
+                cursor.execute('ALTER TABLE reminders ADD COLUMN updated_at TEXT')
+            except sqlite3.OperationalError:
+                pass  # Column already exists
+
+            # Add unique constraint if it doesn't exist
+            try:
+                cursor.execute('''
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_reminder_message
+                    ON reminders(channel_id, thread_ts, user_id, message_ts)
+                ''')
+            except sqlite3.OperationalError:
+                pass  # Index already exists
+
+            # Create audit log table for tracking changes
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS reminder_audit_log (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    reminder_id TEXT NOT NULL,
+                    action TEXT NOT NULL,
+                    performed_by TEXT,
+                    performed_at TEXT NOT NULL,
+                    metadata TEXT,
+                    FOREIGN KEY (reminder_id) REFERENCES reminders (id)
                 )
             ''')
 
@@ -2059,34 +2092,199 @@ CRITICAL INSTRUCTIONS:
         except Exception as e:
             print(f"Error initializing database: {e}")
 
-    def _save_reminder_to_db(self, reminder: Reminder):
-        """Save reminder to database"""
+    def _save_reminder_to_db(self, reminder: Reminder) -> bool:
+        """
+        Save reminder to database using message_ts as the unique identifier.
+
+        Logic:
+        - If a reminder with the same (channel_id, thread_ts, user_id, message_ts) exists → UPDATE
+        - Otherwise → CREATE new reminder
+
+        This ensures:
+        - Multiple tasks in same thread get separate reminders (different message_ts)
+        - Updates to same task modify existing reminder (same message_ts)
+
+        Returns:
+            bool: True if this was an UPDATE, False if this was a CREATE
+        """
         try:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
 
+            now = datetime.now().isoformat()
+
+            # Check if reminder with same message_ts already exists
+            print(f"🔍 Checking for existing reminder: channel={reminder.channel_id}, thread={reminder.thread_ts}, user={reminder.user_id}, message_ts={reminder.message_ts}")
             cursor.execute('''
-                INSERT OR REPLACE INTO reminders
-                (id, user_id, channel_id, message_ts, thread_ts, due_at, original_text, created_at, is_active)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (
-                reminder.id,
-                reminder.user_id,
-                reminder.channel_id,
-                reminder.message_ts,
-                reminder.thread_ts,
-                reminder.due_at.isoformat(),
-                reminder.original_text,
-                reminder.created_at.isoformat(),
-                1
-            ))
+                SELECT id, due_at, original_text, created_at
+                FROM reminders
+                WHERE channel_id = ? AND thread_ts = ? AND user_id = ? AND message_ts = ?
+            ''', (reminder.channel_id, reminder.thread_ts, reminder.user_id, reminder.message_ts))
 
-            conn.commit()
+            existing = cursor.fetchone()
+
+            if existing:
+                print(f"✅ Found existing reminder: {existing[0]}")
+                print(f"   → This is an UPDATE (same message_ts={reminder.message_ts})")
+            else:
+                print(f"❌ No existing reminder found - will create new one")
+                print(f"   → This is a CREATE (new message_ts={reminder.message_ts})")
+
+            if existing:
+                # UPDATE existing reminder - preserve created_at, only update due_at and updated_at
+                existing_id, old_due_at, old_text, created_at = existing
+
+                cursor.execute('''
+                    UPDATE reminders
+                    SET due_at = ?,
+                        original_text = ?,
+                        updated_at = ?
+                        -- Note: created_at is NOT updated, preserving original creation time
+                        -- Note: is_active is NOT updated here to preserve current state
+                    WHERE id = ?
+                ''', (
+                    reminder.due_at.isoformat(),
+                    reminder.original_text,
+                    now,
+                    existing_id
+                ))
+
+                # Use existing ID and created_at (preserve original creation time)
+                reminder.id = existing_id
+                reminder.created_at = datetime.fromisoformat(created_at)
+
+                action = "UPDATE"
+                metadata = f"ETC reminder updated: {reminder.matched_text} (old: {old_due_at})"
+                print(f"🔄 UPDATE: Modified existing reminder {existing_id} for message_ts {reminder.message_ts}")
+                print(f"   Preserved created_at: {created_at}, Updated due_at to: {reminder.due_at.isoformat()}")
+
+                # Log the action to audit table
+                self._log_audit_action(cursor, reminder.id, action, reminder.user_id, metadata)
+
+                conn.commit()
+                conn.close()
+
+                print(f"💾 Updated reminder in database: {reminder.id} (due: {reminder.due_at})")
+                print(f"💾 Database path: {os.path.abspath(self.db_path)}")
+
+                return True  # This was an UPDATE
+
+            else:
+                # CREATE new reminder
+                cursor.execute('''
+                    INSERT INTO reminders
+                    (id, user_id, channel_id, message_ts, thread_ts, due_at, original_text, created_at, updated_at, is_active)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (
+                    reminder.id,
+                    reminder.user_id,
+                    reminder.channel_id,
+                    reminder.message_ts,
+                    reminder.thread_ts,
+                    reminder.due_at.isoformat(),
+                    reminder.original_text,
+                    reminder.created_at.isoformat(),
+                    None,  # updated_at is NULL for new records
+                    1
+                ))
+
+                action = "CREATE"
+                metadata = f"ETC reminder created: {reminder.matched_text}"
+                print(f"📝 CREATE: New reminder {reminder.id} for message_ts {reminder.message_ts}")
+
+                # Log the action to audit table
+                self._log_audit_action(cursor, reminder.id, action, reminder.user_id, metadata)
+
+                conn.commit()
+                conn.close()
+
+                print(f"💾 Saved reminder to database: {reminder.id} (due: {reminder.due_at})")
+                print(f"💾 Database path: {os.path.abspath(self.db_path)}")
+
+                # Verify it was saved
+                conn = sqlite3.connect(self.db_path)
+                cursor = conn.cursor()
+                cursor.execute('SELECT COUNT(*) FROM reminders')
+                total_count = cursor.fetchone()[0]
+                cursor.execute('SELECT COUNT(*) FROM reminders WHERE is_active = 1')
+                active_count = cursor.fetchone()[0]
+                conn.close()
+                print(f"💾 Database now has {total_count} total reminders ({active_count} active)")
+
+                return False  # This was a CREATE
+
+        except sqlite3.IntegrityError as e:
+            # Handle unique constraint violation (shouldn't happen with our logic, but just in case)
+            print(f"⚠️ Integrity error (duplicate message_ts?): {e}")
+            # Try to find and update the existing record
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT id FROM reminders
+                WHERE channel_id = ? AND thread_ts = ? AND user_id = ? AND message_ts = ?
+            ''', (reminder.channel_id, reminder.thread_ts, reminder.user_id, reminder.message_ts))
+            existing = cursor.fetchone()
+            if existing:
+                existing_id = existing[0]
+                cursor.execute('''
+                    UPDATE reminders
+                    SET due_at = ?, original_text = ?, updated_at = ?, is_active = 1
+                    WHERE id = ?
+                ''', (reminder.due_at.isoformat(), reminder.original_text, datetime.now().isoformat(), existing_id))
+                conn.commit()
+                reminder.id = existing_id
+                print(f"🔄 Fixed: Updated existing reminder {existing_id}")
             conn.close()
-            print(f"ETC reminder saved to database: {reminder.id}")
-
         except Exception as e:
-            print(f"Error saving reminder to database: {e}")
+            print(f"❌ Error saving reminder to database: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def _is_update_message(self, message: str) -> bool:
+        """Check if message contains update keywords indicating it's modifying an existing ETC"""
+        message_lower = message.lower().strip()
+
+        # Update keywords that indicate modification of existing ETC
+        update_keywords = [
+            'update', 'updated', 'updating', 'change', 'changed', 'changing',
+            'modify', 'modified', 'modifying', 'extend', 'extended', 'extending',
+            'postpone', 'postponed', 'postponing', 'delay', 'delayed', 'delaying',
+            'reschedule', 'rescheduled', 'rescheduling', 'move', 'moved', 'moving',
+            'shift', 'shifted', 'shifting', 'adjust', 'adjusted', 'adjusting'
+        ]
+
+        # Check if message starts with update keywords
+        for keyword in update_keywords:
+            if message_lower.startswith(keyword + ' '):
+                return True
+            if message_lower.startswith(keyword + ' etc'):
+                return True
+
+        # Check for phrases like "etc update", "etc change", etc.
+        for keyword in update_keywords:
+            if f'etc {keyword}' in message_lower:
+                return True
+
+        return False
+
+    def _log_audit_action(self, cursor, reminder_id: str, action: str, performed_by: str = None,
+                         metadata: str = None):
+        """Log an action to the audit table"""
+        try:
+            cursor.execute('''
+                INSERT INTO reminder_audit_log
+                (reminder_id, action, performed_by, performed_at, metadata)
+                VALUES (?, ?, ?, ?, ?)
+            ''', (
+                reminder_id,
+                action,
+                performed_by,
+                datetime.now().isoformat(),
+                metadata
+            ))
+            print(f"📝 Audit log: {action} for reminder {reminder_id}")
+        except Exception as e:
+            print(f"⚠️ Failed to log audit action: {e}")
 
     def _load_reminders_from_db(self):
         """Load existing reminders from database"""
