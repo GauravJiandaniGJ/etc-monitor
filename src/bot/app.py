@@ -13,7 +13,6 @@ from src.parsers.pattern_matcher import PatternMatcher
 from src.parsers.datetime_parser import DateTimeParser
 from src.parsers.ai_parser import AIParser
 
-from src.services.ai_service import GeminiService
 from src.services.deadline_service import DeadlineService
 from src.services.reminder_service import ReminderService
 from src.services.notification_service import NotificationService
@@ -67,12 +66,11 @@ class SlackBot:
         # Initialize AI parser (optional)
         ai_parser = None
         if settings.is_gemini_configured:
-            ai_service = GeminiService(
+            ai_parser = AIParser(
                 api_key=settings.gemini_api_key,
                 model=settings.gemini_model,
                 temperature=settings.gemini_temperature
             )
-            ai_parser = AIParser(ai_service)
             logger.info('AI parser initialized with Gemini')
         else:
             logger.warning('Gemini API not configured, AI parser disabled')
@@ -184,7 +182,7 @@ class SlackBot:
             logger.success('Slack bot started successfully')
 
         except Exception as e:
-            logger.error(f'Error starting bot: {e}', exc_info=True)
+            logger.error(f'Error starting bot: {e}', exc=e)
             raise
 
     def stop(self):
@@ -206,7 +204,7 @@ class SlackBot:
             logger.success('Slack bot stopped successfully')
 
         except Exception as e:
-            logger.error(f'Error stopping bot: {e}', exc_info=True)
+            logger.error(f'Error stopping bot: {e}', exc=e)
             raise
 
 
@@ -241,7 +239,7 @@ def main():
         logger.info('Received keyboard interrupt')
         bot.stop()
     except Exception as e:
-        logger.error(f'Fatal error: {e}', exc_info=True)
+        logger.error(f'Fatal error: {e}', exc=e)
         raise
 
 

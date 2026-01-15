@@ -1,5 +1,5 @@
 """Reminder repository for database operations."""
-from typing import Optional, List
+from typing import Optional, List, Union
 from datetime import datetime
 from src.core.models import Reminder, ReminderStatus
 from src.database.db_manager import DBManager
@@ -37,14 +37,26 @@ class ReminderRepository:
         Raises:
             sqlite3.Error: If creation fails
         """
-        query = '''
-            INSERT INTO reminders (
-                channel_id, thread_ts, user_id, message_ts,
-                original_message, deadline_text, deadline_datetime,
-                reminder_datetime, status, retry_count, reschedule_count,
-                previous_deadline
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        '''
+        # Build query with RETURNING clause for PostgreSQL/MySQL
+        if self.db.database_type == 'postgresql' or self.db.database_type == 'mysql':
+            query = '''
+                INSERT INTO reminders (
+                    channel_id, thread_ts, user_id, message_ts,
+                    original_message, deadline_text, deadline_datetime,
+                    reminder_datetime, status, retry_count, reschedule_count,
+                    previous_deadline
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING id
+            '''
+        else:
+            query = '''
+                INSERT INTO reminders (
+                    channel_id, thread_ts, user_id, message_ts,
+                    original_message, deadline_text, deadline_datetime,
+                    reminder_datetime, status, retry_count, reschedule_count,
+                    previous_deadline
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            '''
 
         params = (
             reminder.channel_id,
@@ -61,9 +73,23 @@ class ReminderRepository:
             self._datetime_to_str(reminder.previous_deadline)
         )
 
-        reminder_id = self.db.execute(query, params)
-        logger.success(f'Created reminder ID {reminder_id} for user {reminder.user_id}')
-        return reminder_id
+        # For PostgreSQL/MySQL, use RETURNING to get the ID
+        if self.db.database_type == 'postgresql' or self.db.database_type == 'mysql':
+            result = self.db.fetch_one(query, params)
+            if result and 'id' in result:
+                reminder_id = result['id']
+                logger.success(f'Created reminder ID {reminder_id} for user {reminder.user_id}')
+                return reminder_id
+            else:
+                raise ValueError('Failed to get reminder ID from database (RETURNING clause)')
+        else:
+            # For SQLite, use lastrowid
+            result = self.db.execute(query, params)
+            reminder_id = result if isinstance(result, int) and result > 0 else None
+            if reminder_id is None:
+                raise ValueError('Failed to get reminder ID from database (lastrowid)')
+            logger.success(f'Created reminder ID {reminder_id} for user {reminder.user_id}')
+            return reminder_id
 
     def get_by_id(self, reminder_id: int) -> Optional[Reminder]:
         """Get reminder by ID.
@@ -296,7 +322,9 @@ class ReminderRepository:
 
         # If marking as sent, record sent_at timestamp
         if status == ReminderStatus.SENT:
-            updates['sent_at'] = self._datetime_to_str(datetime.now())
+            # datetime.now() is never None, so _datetime_to_str should never return None
+            sent_at_str = self._datetime_to_str(datetime.now())
+            updates['sent_at'] = sent_at_str or datetime.now().isoformat()
 
         return self.update(reminder_id, updates)
 
@@ -431,6 +459,15 @@ class ReminderRepository:
         Returns:
             Reminder object
         """
+        deadline_dt = self._str_to_datetime(row['deadline_datetime'])
+        reminder_dt = self._str_to_datetime(row['reminder_datetime'])
+
+        # These are required fields - raise error if None
+        if deadline_dt is None:
+            raise ValueError(f'deadline_datetime is None for reminder ID {row.get("id")}')
+        if reminder_dt is None:
+            raise ValueError(f'reminder_datetime is None for reminder ID {row.get("id")}')
+
         return Reminder(
             id=row['id'],
             channel_id=row['channel_id'],
@@ -439,8 +476,8 @@ class ReminderRepository:
             message_ts=row['message_ts'],
             original_message=row['original_message'],
             deadline_text=row['deadline_text'],
-            deadline_datetime=self._str_to_datetime(row['deadline_datetime']),
-            reminder_datetime=self._str_to_datetime(row['reminder_datetime']),
+            deadline_datetime=deadline_dt,
+            reminder_datetime=reminder_dt,
             status=ReminderStatus(row['status']),
             created_at=self._str_to_datetime(row['created_at']),
             updated_at=self._str_to_datetime(row['updated_at']),
@@ -467,17 +504,25 @@ class ReminderRepository:
         return dt_naive.isoformat()
 
     @staticmethod
-    def _str_to_datetime(dt_str: Optional[str]) -> Optional[datetime]:
-        """Convert string to datetime from database.
+    def _str_to_datetime(dt_str: Optional[Union[str, datetime]]) -> Optional[datetime]:
+        """Convert string or datetime to datetime from database.
 
         Args:
-            dt_str: ISO format datetime string
+            dt_str: ISO format datetime string or datetime object
 
         Returns:
             Datetime object or None
         """
         if not dt_str:
             return None
-        # Parse and assume IST
-        dt = datetime.fromisoformat(dt_str)
-        return to_ist(dt)
+
+        # If already a datetime object (PostgreSQL returns datetime directly)
+        if isinstance(dt_str, datetime):
+            return to_ist(dt_str)
+
+        # If it's a string, parse it
+        if isinstance(dt_str, str):
+            dt = datetime.fromisoformat(dt_str)
+            return to_ist(dt)
+
+        return None

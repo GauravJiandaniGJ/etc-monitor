@@ -24,6 +24,8 @@ class Migration:
                 f'migration_{self.version}',
                 self.file_path
             )
+            if spec is None or spec.loader is None:
+                raise ImportError(f'Failed to create spec for migration {self.version}')
             self.module = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(self.module)
         return self.module
@@ -146,14 +148,14 @@ class MigrationManager:
     def print_status(self):
         status = self.get_status()
 
-        print('\n📊 Migration Status')
+        print('\n[MIGRATION STATUS]')
         print('=' * 50)
 
-        print('\n✅ Applied:')
+        print('\n[APPLIED]:')
         for m in status['applied'] or ['(none)']:
             print(f'  - {m}')
 
-        print('\n⏳ Pending:')
+        print('\n[PENDING]:')
         for m in status['pending'] or ['(none)']:
             print(f'  - {m}')
 

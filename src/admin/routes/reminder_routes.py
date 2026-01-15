@@ -67,6 +67,44 @@ def list_reminders():
         limit = int(request.args.get('limit', 100))
         offset = int(request.args.get('offset', 0))
 
+        logger.info(f'Listing reminders - status: {status_filter}, limit: {limit}, offset: {offset}')
+
+        # Get total count first (for accurate stats)
+        # We need to count all reminders matching the filters, not just the returned ones
+        db_manager = _reminder_service.reminder_repo.db
+
+        # Build count query based on filters (use parameterized queries)
+        placeholder = '%s' if db_manager.database_type != 'sqlite' else '?'
+        count_conditions = []
+        count_params = []
+
+        if status_filter:
+            count_conditions.append(f'status = {placeholder}')
+            count_params.append(status_filter)
+        if user_id_filter:
+            count_conditions.append(f'user_id = {placeholder}')
+            count_params.append(user_id_filter)
+        if channel_id_filter:
+            count_conditions.append(f'channel_id = {placeholder}')
+            count_params.append(channel_id_filter)
+
+        # Build final count query
+        where_clause = ' AND '.join(count_conditions) if count_conditions else '1=1'
+        count_query = f'SELECT COUNT(*) as count FROM reminders WHERE {where_clause}'
+
+        # Get total count
+        count_result = db_manager.fetch_one(count_query, tuple(count_params) if count_params else None)
+        total = count_result['count'] if count_result else 0
+
+        # Get status counts for accurate dashboard stats (only if no filters)
+        status_counts = {'pending': 0, 'sent': 0, 'cancelled': 0, 'failed': 0, 'rescheduled': 0}
+        if not status_filter and not user_id_filter and not channel_id_filter:
+            # Get counts for each status
+            for status in ['pending', 'sent', 'cancelled', 'failed', 'rescheduled']:
+                status_query = f'SELECT COUNT(*) as count FROM reminders WHERE status = {placeholder}'
+                status_result = db_manager.fetch_one(status_query, (status,))
+                status_counts[status] = status_result['count'] if status_result else 0
+
         # Get all reminders (or a large batch if filtering)
         # If filtering, we need to get more to ensure we have enough after filter
         # Otherwise, respect the limit for performance
@@ -74,9 +112,11 @@ def list_reminders():
             # When filtering, get a large batch to ensure enough results
             fetch_limit = min(limit * 20, 10000)  # Cap at 10k for safety
             all_reminders = _reminder_service.reminder_repo.get_all(limit=fetch_limit)
+            logger.info(f'Fetched {len(all_reminders)} reminders from database (with filters)')
         else:
             # No filters, respect the limit
             all_reminders = _reminder_service.reminder_repo.get_all(limit=limit, offset=offset)
+            logger.info(f'Fetched {len(all_reminders)} reminders from database (no filters)')
 
         # Apply status filter
         if status_filter:
@@ -91,7 +131,6 @@ def list_reminders():
             reminders = [r for r in reminders if r.channel_id == channel_id_filter]
 
         # Apply pagination (only if we filtered, otherwise already paginated)
-        total = len(reminders)
         if status_filter or user_id_filter or channel_id_filter:
             reminders = reminders[offset:offset + limit]
 
@@ -100,13 +139,17 @@ def list_reminders():
             'total': total,
             'limit': limit,
             'offset': offset,
-            'reminders': [_format_reminder(r) for r in reminders]
+            'reminders': [_format_reminder(r) for r in reminders],
+            'stats': status_counts  # Include status counts for dashboard
         }
 
+        logger.info(f'Returning {len(reminders)} reminders (total: {total})')
         return jsonify(result), 200
 
     except Exception as e:
-        logger.error(f'Error listing reminders: {e}', exc_info=True)
+        logger.error(f'Error listing reminders: {e}', exc=e)
+        import traceback
+        logger.error(f'Traceback: {traceback.format_exc()}')
         return jsonify({'error': str(e)}), 500
 
 
@@ -129,7 +172,7 @@ def get_reminder(reminder_id: int):
         return jsonify(_format_reminder(reminder)), 200
 
     except Exception as e:
-        logger.error(f'Error getting reminder {reminder_id}: {e}', exc_info=True)
+        logger.error(f'Error getting reminder {reminder_id}: {e}', exc=e)
         return jsonify({'error': str(e)}), 500
 
 
@@ -193,7 +236,7 @@ def update_reminder(reminder_id: int):
             return jsonify({'error': 'Failed to update reminder'}), 500
 
     except Exception as e:
-        logger.error(f'Error updating reminder {reminder_id}: {e}', exc_info=True)
+        logger.error(f'Error updating reminder {reminder_id}: {e}', exc=e)
         return jsonify({'error': str(e)}), 500
 
 
@@ -221,7 +264,7 @@ def delete_reminder(reminder_id: int):
             return jsonify({'error': 'Failed to delete reminder'}), 500
 
     except Exception as e:
-        logger.error(f'Error deleting reminder {reminder_id}: {e}', exc_info=True)
+        logger.error(f'Error deleting reminder {reminder_id}: {e}', exc=e)
         return jsonify({'error': str(e)}), 500
 
 
@@ -253,7 +296,7 @@ def cancel_reminder(reminder_id: int):
             return jsonify({'error': 'Failed to cancel reminder'}), 500
 
     except Exception as e:
-        logger.error(f'Error cancelling reminder {reminder_id}: {e}', exc_info=True)
+        logger.error(f'Error cancelling reminder {reminder_id}: {e}', exc=e)
         return jsonify({'error': str(e)}), 500
 
 
@@ -277,7 +320,7 @@ def get_user_reminders(user_id: str):
         }), 200
 
     except Exception as e:
-        logger.error(f'Error getting reminders for user {user_id}: {e}', exc_info=True)
+        logger.error(f'Error getting reminders for user {user_id}: {e}', exc=e)
         return jsonify({'error': str(e)}), 500
 
 
@@ -313,7 +356,7 @@ def get_channel_reminders(channel_id: str):
         }), 200
 
     except Exception as e:
-        logger.error(f'Error getting reminders for channel {channel_id}: {e}', exc_info=True)
+        logger.error(f'Error getting reminders for channel {channel_id}: {e}', exc=e)
         return jsonify({'error': str(e)}), 500
 
 
@@ -337,7 +380,7 @@ def get_audit_log(reminder_id: int):
         }), 200
 
     except Exception as e:
-        logger.error(f'Error getting audit log for reminder {reminder_id}: {e}', exc_info=True)
+        logger.error(f'Error getting audit log for reminder {reminder_id}: {e}', exc=e)
         return jsonify({'error': str(e)}), 500
 
 

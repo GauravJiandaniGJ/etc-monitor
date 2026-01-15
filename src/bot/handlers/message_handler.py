@@ -1,5 +1,5 @@
 """Message handler for processing Slack thread replies."""
-from typing import Callable, Optional
+from typing import Callable
 from src.core.models import ReminderContext
 from src.services.deadline_service import DeadlineService
 from src.services.reminder_service import ReminderService
@@ -72,14 +72,22 @@ class MessageHandler:
                 logger.warning('Missing required fields in event')
                 return
 
+            # Type safety: ensure all values are strings
+            if not isinstance(channel_id, str) or not isinstance(user_id, str) or not isinstance(message_ts, str):
+                logger.warning('Invalid field types in event')
+                return
+
             logger.info(f'Processing message from user {user_id}: "{text}"')
 
             # Step 2: Check for ETC indicator
-            if not self.deadline_service.has_etc_indicator(text):
-                logger.debug('No ETC indicator found in message')
+            has_etc = self.deadline_service.has_etc_indicator(text)
+            logger.info(f'ETC indicator check result: {has_etc} for message: "{text}"')
+
+            if not has_etc:
+                logger.info(f'No ETC indicator found in message: "{text}"')
                 return
 
-            logger.info('ETC indicator detected')
+            logger.info('ETC indicator detected - proceeding to deadline detection')
 
             # Step 3: Parse deadline
             context = ReminderContext(
@@ -116,11 +124,19 @@ class MessageHandler:
                 logger.error('Failed to create or update reminder')
                 return
 
+            if not reminder.id:
+                logger.error('Reminder created but has no ID - database issue!')
+                return
+
             logger.success(
-                f'Reminder {"updated" if is_update else "created"}: {reminder.id}'
+                f'Reminder {"updated" if is_update else "created"}: {reminder.id} (deadline: {reminder.deadline_datetime})'
             )
 
             # Step 5: Schedule job
+            if not reminder.id:
+                logger.error('Reminder created but has no ID')
+                return
+
             if not self.scheduler.schedule(reminder, self._send_reminder_callback):
                 logger.error(f'Failed to schedule reminder {reminder.id}')
                 # Mark as failed
@@ -135,7 +151,7 @@ class MessageHandler:
                 # Don't fail the whole operation if confirmation fails
 
         except Exception as e:
-            logger.error(f'Error handling message: {e}', exc_info=True)
+            logger.error(f'Error handling message: {e}', exc=e)
 
     def _send_reminder_callback(self, reminder):
         """Callback function for scheduled reminder jobs.
@@ -147,6 +163,10 @@ class MessageHandler:
             reminder: Reminder object to send
         """
         try:
+            if not reminder.id:
+                logger.error('Reminder has no ID, cannot process callback')
+                return
+
             logger.info(f'Sending reminder {reminder.id} (callback triggered)')
 
             # Send the reminder notification
@@ -165,12 +185,14 @@ class MessageHandler:
                 logger.error(f'Reminder {reminder.id} failed to send')
 
         except Exception as e:
-            logger.error(f'Error in reminder callback for {reminder.id}: {e}', exc_info=True)
+            reminder_id = reminder.id if reminder.id else 'unknown'
+            logger.error(f'Error in reminder callback for {reminder_id}: {e}', exc=e)
             # Mark as failed
-            try:
-                self.reminder_service.mark_failed(
-                    reminder.id,
-                    f"Callback error: {str(e)}"
-                )
-            except:
-                pass
+            if reminder.id:
+                try:
+                    self.reminder_service.mark_failed(
+                        reminder.id,
+                        f"Callback error: {str(e)}"
+                    )
+                except:
+                    pass

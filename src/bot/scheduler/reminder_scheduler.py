@@ -49,8 +49,8 @@ class ReminderScheduler:
         """Schedule a reminder job.
 
         Schedules a job to execute the callback when the reminder is due.
-        If the reminder time is too close to now (less than 1 minute),
-        it will be scheduled for 1 minute from now.
+        If the reminder time is too close to now (less than 30 seconds),
+        it will be scheduled for 30 seconds from now.
 
         Args:
             reminder: Reminder object to schedule
@@ -77,16 +77,18 @@ class ReminderScheduler:
                 from src.utils.timezone import make_aware
                 reminder_time = make_aware(reminder_time)
 
-            # Check if reminder is too close to now (less than 1 minute)
+            # Check if reminder is too close to now
             current_time = now_ist()
             time_diff = (reminder_time - current_time).total_seconds()
 
-            if time_diff < 60:  # Less than 1 minute
+            # Only adjust if reminder is less than 30 seconds away (very short)
+            # For short deadlines (1-5 min), the reminder is intentionally set at deadline time
+            if time_diff < 30:  # Less than 30 seconds
                 logger.warning(
                     f'Reminder {reminder.id} too close to now ({time_diff:.1f}s), '
-                    f'scheduling for 1 minute from now'
+                    f'scheduling for 30 seconds from now'
                 )
-                reminder_time = current_time + timedelta(minutes=1)
+                reminder_time = current_time + timedelta(seconds=30)
 
             # Only schedule if in the future
             if time_diff <= 0 and reminder_time <= current_time:

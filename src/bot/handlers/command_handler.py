@@ -99,7 +99,7 @@ class CommandHandler:
             logger.success(f'Listed {len(active_reminders)} reminders for user {user_id}')
 
         except Exception as e:
-            logger.error(f'Error handling /my-reminders: {e}', exc_info=True)
+            logger.error(f'Error handling /my-reminders: {e}', exc=e)
             respond("Error: Failed to retrieve your reminders. Please try again later.")
 
     def handle_cancel_reminder(
@@ -170,7 +170,7 @@ class CommandHandler:
 
                 deadline_str = format_datetime_friendly(reminder.deadline_datetime)
                 respond(
-                    f"✅ Reminder {reminder_id} cancelled.\n"
+                    f"Reminder {reminder_id} cancelled.\n"
                     f"Original deadline: {deadline_str}"
                 )
                 logger.success(f'Reminder {reminder_id} cancelled by user {user_id}')
@@ -179,7 +179,7 @@ class CommandHandler:
                 logger.error(f'Failed to cancel reminder {reminder_id}')
 
         except Exception as e:
-            logger.error(f'Error handling /cancel-reminder: {e}', exc_info=True)
+            logger.error(f'Error handling /cancel-reminder: {e}', exc=e)
             respond("Error: Failed to cancel reminder. Please try again later.")
 
     def handle_list_thread_reminders(
@@ -258,5 +258,5 @@ class CommandHandler:
             logger.success(f'Listed {len(active_reminders)} reminders in thread')
 
         except Exception as e:
-            logger.error(f'Error handling /list-thread-reminders: {e}', exc_info=True)
+            logger.error(f'Error handling /list-thread-reminders: {e}', exc=e)
             respond("Error: Failed to retrieve thread reminders. Please try again later.")

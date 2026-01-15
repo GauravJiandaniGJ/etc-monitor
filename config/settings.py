@@ -126,14 +126,14 @@ class Settings:
 
         # Warn about insecure defaults
         if self.admin_password == 'changeme':
-            print('⚠️  WARNING: Using default admin password. Change ADMIN_PASSWORD in .env for production!')
+            print('[WARNING] Using default admin password. Change ADMIN_PASSWORD in .env for production!')
 
         if self.flask_secret_key == 'generate-secure-key-here':
-            print('⚠️  WARNING: Using default Flask secret key. Change FLASK_SECRET_KEY in .env for production!')
+            print('[WARNING] Using default Flask secret key. Change FLASK_SECRET_KEY in .env for production!')
 
     def _print_config(self):
         """Print loaded configuration with sensitive values masked."""
-        print('📝 Configuration loaded:')
+        print('[INFO] Configuration loaded:')
         print(f'  - Slack Bot Token: {self._mask_token(self.slack_bot_token)}')
         print(f'  - Slack App Token: {self._mask_token(self.slack_app_token)}')
         print(f'  - Gemini API Key: {self._mask_token(self.gemini_api_key) if self.gemini_api_key else "Not configured"}')

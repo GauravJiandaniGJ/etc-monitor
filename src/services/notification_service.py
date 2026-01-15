@@ -1,6 +1,7 @@
 """Notification service for sending Slack messages."""
 from typing import Optional
 import time
+from datetime import timedelta
 from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
 from src.core.models import Reminder
@@ -49,18 +50,21 @@ class NotificationService:
         for attempt in range(max_retries):
             try:
                 # Validate thread_ts before sending
+                # Use deadline_text or original_message, fallback to deadline_text
+                reminder_text = reminder.deadline_text or reminder.original_message or "ETC"
+
                 if reminder.thread_ts and len(reminder.thread_ts) > 10 and '.' in reminder.thread_ts:
                     response = self.client.chat_postMessage(
                         channel=reminder.channel_id,
                         thread_ts=reminder.thread_ts,
-                        text=f"<@{reminder.user_id}> Status!\n*ETC:* {reminder.original_text}"
+                        text=f"<@{reminder.user_id}> Status!\n*ETC:* {reminder_text}"
                     )
                 else:
                     # Send as regular message if thread_ts is invalid
                     logger.warning(f'Invalid thread_ts for reminder {reminder.id}, sending as regular message')
                     response = self.client.chat_postMessage(
                         channel=reminder.channel_id,
-                        text=f"<@{reminder.user_id}> Status!\n*ETC:* {reminder.original_text}"
+                        text=f"<@{reminder.user_id}> Status!\n*ETC:* {reminder_text}"
                     )
 
                 if response["ok"]:
@@ -118,10 +122,40 @@ class NotificationService:
         logger.info(f'Sending {action} confirmation for reminder {reminder.id}')
 
         try:
+            # Calculate time difference for reminder message
+            now = now_ist()
+            time_until_reminder = reminder.reminder_datetime - now
+
+            # Format reminder time message - show actual time until reminder
+            # Reminder is always at the exact deadline time
+            if time_until_reminder <= timedelta(seconds=30):
+                reminder_msg = "You'll be reminded in less than a minute."
+            elif time_until_reminder < timedelta(minutes=1):
+                seconds = int(time_until_reminder.total_seconds())
+                sec_text = "second" if seconds == 1 else "seconds"
+                reminder_msg = f"You'll be reminded in {seconds} {sec_text}."
+            elif time_until_reminder < timedelta(hours=1):
+                minutes = int(time_until_reminder.total_seconds() / 60)
+                min_text = "minute" if minutes == 1 else "minutes"
+                reminder_msg = f"You'll be reminded in {minutes} {min_text}."
+            elif time_until_reminder < timedelta(hours=24):
+                hours = int(time_until_reminder.total_seconds() / 3600)
+                minutes = int((time_until_reminder.total_seconds() % 3600) / 60)
+                hour_text = "hour" if hours == 1 else "hours"
+                if minutes > 0:
+                    min_text = "minute" if minutes == 1 else "minutes"
+                    reminder_msg = f"You'll be reminded in {hours} {hour_text} and {minutes} {min_text}."
+                else:
+                    reminder_msg = f"You'll be reminded in {hours} {hour_text}."
+            else:
+                days = int(time_until_reminder.total_seconds() / 86400)
+                day_text = "day" if days == 1 else "days"
+                reminder_msg = f"You'll be reminded in {days} {day_text}."
+
             message = (
-                f"✅ Reminder {action}!\n"
+                f"Reminder {action}!\n"
                 f"Deadline: {deadline_str}\n"
-                f"You'll be reminded 1 hour before."
+                f"{reminder_msg}"
             )
 
             if is_update and reminder.reschedule_count > 0:
@@ -164,7 +198,7 @@ class NotificationService:
         try:
             deadline_str = format_datetime_friendly(reminder.deadline_datetime)
             message = (
-                f"❌ Reminder cancelled.\n"
+                f"Reminder cancelled.\n"
                 f"Original deadline: {deadline_str}"
             )
 
