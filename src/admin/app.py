@@ -44,6 +44,27 @@ def create_app(settings: Settings = None) -> Flask:
     app.register_blueprint(health_bp)
     app.register_blueprint(reminder_bp)
 
+    # Root route
+    @app.route('/')
+    def root():
+        """Root endpoint with API information."""
+        return jsonify({
+            'service': 'ETC Monitor Admin API',
+            'version': '1.0.0',
+            'endpoints': {
+                'health': '/health',
+                'health_db': '/health/db',
+                'health_slack': '/health/slack',
+                'reminders': '/api/reminders',
+                'reminder_detail': '/api/reminders/<id>',
+                'user_reminders': '/api/reminders/user/<user_id>',
+                'channel_reminders': '/api/reminders/channel/<channel_id>',
+                'audit_log': '/api/audit/<reminder_id>'
+            },
+            'authentication': 'HTTP Basic Auth required for /api/* endpoints',
+            'documentation': 'See README.md for API details'
+        }), 200
+
     # Apply authentication to reminder routes
     auth_decorator = require_auth(settings)
 
