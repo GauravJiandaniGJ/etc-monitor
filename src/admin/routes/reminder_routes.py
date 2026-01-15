@@ -67,18 +67,22 @@ def list_reminders():
         limit = int(request.args.get('limit', 100))
         offset = int(request.args.get('offset', 0))
 
-        # Get all reminders (we'll filter in memory for simplicity)
-        # In production, you'd want to add filtering to the repository
-        if status_filter:
-            # Filter by status
-            reminders = _reminder_service.reminder_repo.get_pending()
-            if status_filter != 'pending':
-                # For other statuses, we'd need a method in repository
-                # For now, get all and filter
-                all_reminders = _reminder_service.reminder_repo.get_pending()
-                reminders = [r for r in all_reminders if r.status.value == status_filter]
+        # Get all reminders (or a large batch if filtering)
+        # If filtering, we need to get more to ensure we have enough after filter
+        # Otherwise, respect the limit for performance
+        if status_filter or user_id_filter or channel_id_filter:
+            # When filtering, get a large batch to ensure enough results
+            fetch_limit = min(limit * 20, 10000)  # Cap at 10k for safety
+            all_reminders = _reminder_service.reminder_repo.get_all(limit=fetch_limit)
         else:
-            reminders = _reminder_service.reminder_repo.get_pending()
+            # No filters, respect the limit
+            all_reminders = _reminder_service.reminder_repo.get_all(limit=limit, offset=offset)
+
+        # Apply status filter
+        if status_filter:
+            reminders = [r for r in all_reminders if r.status.value == status_filter]
+        else:
+            reminders = all_reminders
 
         # Apply additional filters
         if user_id_filter:
@@ -86,9 +90,10 @@ def list_reminders():
         if channel_id_filter:
             reminders = [r for r in reminders if r.channel_id == channel_id_filter]
 
-        # Apply pagination
+        # Apply pagination (only if we filtered, otherwise already paginated)
         total = len(reminders)
-        reminders = reminders[offset:offset + limit]
+        if status_filter or user_id_filter or channel_id_filter:
+            reminders = reminders[offset:offset + limit]
 
         # Format response
         result = {

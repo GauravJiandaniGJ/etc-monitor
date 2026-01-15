@@ -12,28 +12,28 @@ logger = get_logger('ReminderRepository')
 
 class ReminderRepository:
     """Repository for reminder database operations.
-    
+
     Handles all CRUD operations for reminders table.
     """
-    
+
     def __init__(self, db_manager: DBManager):
         """Initialize reminder repository.
-        
+
         Args:
             db_manager: Database manager instance
         """
         self.db = db_manager
         logger.info('Reminder repository initialized')
-    
+
     def create(self, reminder: Reminder) -> int:
         """Create a new reminder.
-        
+
         Args:
             reminder: Reminder object to create
-            
+
         Returns:
             ID of created reminder
-            
+
         Raises:
             sqlite3.Error: If creation fails
         """
@@ -45,7 +45,7 @@ class ReminderRepository:
                 previous_deadline
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         '''
-        
+
         params = (
             reminder.channel_id,
             reminder.thread_ts,
@@ -60,27 +60,27 @@ class ReminderRepository:
             reminder.reschedule_count,
             self._datetime_to_str(reminder.previous_deadline)
         )
-        
+
         reminder_id = self.db.execute(query, params)
         logger.success(f'Created reminder ID {reminder_id} for user {reminder.user_id}')
         return reminder_id
-    
+
     def get_by_id(self, reminder_id: int) -> Optional[Reminder]:
         """Get reminder by ID.
-        
+
         Args:
             reminder_id: Reminder ID
-            
+
         Returns:
             Reminder object or None if not found
         """
         query = 'SELECT * FROM reminders WHERE id = ?'
         row = self.db.fetch_one(query, (reminder_id,))
-        
+
         if row:
             return self._row_to_reminder(row)
         return None
-    
+
     def get_by_composite_key(
         self,
         channel_id: str,
@@ -88,128 +88,174 @@ class ReminderRepository:
         user_id: str
     ) -> Optional[Reminder]:
         """Get reminder by composite key (channel, thread, user).
-        
+
         Args:
             channel_id: Slack channel ID
             thread_ts: Thread timestamp
             user_id: User ID
-            
+
         Returns:
             Reminder object or None if not found
         """
         query = '''
-            SELECT * FROM reminders 
+            SELECT * FROM reminders
             WHERE channel_id = ? AND thread_ts = ? AND user_id = ?
             ORDER BY created_at DESC
             LIMIT 1
         '''
         row = self.db.fetch_one(query, (channel_id, thread_ts, user_id))
-        
+
         if row:
             return self._row_to_reminder(row)
         return None
-    
+
+    def get_all(self, limit: Optional[int] = None, offset: int = 0) -> List[Reminder]:
+        """Get all reminders.
+
+        Args:
+            limit: Maximum number of results
+            offset: Offset for pagination
+
+        Returns:
+            List of all reminders
+        """
+        # Use parameterized queries to prevent SQL injection
+        if limit:
+            # Validate limit and offset are integers
+            limit = max(1, int(limit))
+            offset = max(0, int(offset))
+
+            if self.db.database_type == 'postgresql':
+                query = '''
+                    SELECT * FROM reminders
+                    ORDER BY created_at DESC
+                    LIMIT %s OFFSET %s
+                '''
+                rows = self.db.fetch_all(query, (limit, offset))
+            elif self.db.database_type == 'mysql':
+                query = '''
+                    SELECT * FROM reminders
+                    ORDER BY created_at DESC
+                    LIMIT %s OFFSET %s
+                '''
+                rows = self.db.fetch_all(query, (limit, offset))
+            else:  # SQLite
+                query = '''
+                    SELECT * FROM reminders
+                    ORDER BY created_at DESC
+                    LIMIT ? OFFSET ?
+                '''
+                rows = self.db.fetch_all(query, (limit, offset))
+        else:
+            query = '''
+                SELECT * FROM reminders
+                ORDER BY created_at DESC
+            '''
+            rows = self.db.fetch_all(query)
+
+        return [self._row_to_reminder(row) for row in rows]
+
     def get_pending(self) -> List[Reminder]:
         """Get all pending reminders.
-        
+
         Returns:
             List of pending reminders
         """
         query = '''
-            SELECT * FROM reminders 
+            SELECT * FROM reminders
             WHERE status = 'pending'
             ORDER BY reminder_datetime ASC
         '''
         rows = self.db.fetch_all(query)
         return [self._row_to_reminder(row) for row in rows]
-    
+
     def get_due(self, before: datetime) -> List[Reminder]:
         """Get reminders due before specified time.
-        
+
         Args:
             before: Datetime threshold
-            
+
         Returns:
             List of due reminders
         """
         query = '''
-            SELECT * FROM reminders 
-            WHERE status = 'pending' 
+            SELECT * FROM reminders
+            WHERE status = 'pending'
             AND reminder_datetime <= ?
             ORDER BY reminder_datetime ASC
         '''
         before_str = self._datetime_to_str(before)
         rows = self.db.fetch_all(query, (before_str,))
         return [self._row_to_reminder(row) for row in rows]
-    
+
     def get_by_channel(
         self,
         channel_id: str,
         thread_ts: Optional[str] = None
     ) -> List[Reminder]:
         """Get reminders by channel, optionally filtered by thread.
-        
+
         Args:
             channel_id: Slack channel ID
             thread_ts: Optional thread timestamp
-            
+
         Returns:
             List of reminders
         """
         if thread_ts:
             query = '''
-                SELECT * FROM reminders 
+                SELECT * FROM reminders
                 WHERE channel_id = ? AND thread_ts = ?
                 ORDER BY created_at DESC
             '''
             rows = self.db.fetch_all(query, (channel_id, thread_ts))
         else:
             query = '''
-                SELECT * FROM reminders 
+                SELECT * FROM reminders
                 WHERE channel_id = ?
                 ORDER BY created_at DESC
             '''
             rows = self.db.fetch_all(query, (channel_id,))
-        
+
         return [self._row_to_reminder(row) for row in rows]
-    
+
     def get_by_user(self, user_id: str) -> List[Reminder]:
         """Get reminders by user.
-        
+
         Args:
             user_id: User ID
-            
+
         Returns:
             List of reminders
         """
         query = '''
-            SELECT * FROM reminders 
+            SELECT * FROM reminders
             WHERE user_id = ?
             ORDER BY created_at DESC
         '''
         rows = self.db.fetch_all(query, (user_id,))
         return [self._row_to_reminder(row) for row in rows]
-    
+
     def update(self, reminder_id: int, updates: dict) -> bool:
         """Update reminder fields.
-        
+
         Args:
             reminder_id: Reminder ID
             updates: Dictionary of field names to values
-            
+
         Returns:
             True if update successful
-            
+
         Raises:
             sqlite3.Error: If update fails
         """
         if not updates:
             return False
-        
+
         # Build SET clause
         set_clauses = []
         params = []
-        
+
         for field, value in updates.items():
             set_clauses.append(f'{field} = ?')
             # Convert datetime objects to strings
@@ -218,42 +264,42 @@ class ReminderRepository:
             elif isinstance(value, ReminderStatus):
                 value = value.value
             params.append(value)
-        
+
         # Add updated_at timestamp
         set_clauses.append('updated_at = ?')
         params.append(self._datetime_to_str(datetime.now()))
-        
+
         # Add reminder_id for WHERE clause
         params.append(reminder_id)
-        
+
         query = f'''
-            UPDATE reminders 
+            UPDATE reminders
             SET {', '.join(set_clauses)}
             WHERE id = ?
         '''
-        
+
         self.db.execute(query, tuple(params))
         logger.success(f'Updated reminder ID {reminder_id}')
         return True
-    
+
     def update_status(self, reminder_id: int, status: ReminderStatus) -> bool:
         """Update reminder status.
-        
+
         Args:
             reminder_id: Reminder ID
             status: New status
-            
+
         Returns:
             True if update successful
         """
         updates = {'status': status.value}
-        
+
         # If marking as sent, record sent_at timestamp
         if status == ReminderStatus.SENT:
             updates['sent_at'] = self._datetime_to_str(datetime.now())
-        
+
         return self.update(reminder_id, updates)
-    
+
     def reschedule(
         self,
         reminder_id: int,
@@ -261,12 +307,12 @@ class ReminderRepository:
         new_reminder: datetime
     ) -> bool:
         """Reschedule a reminder.
-        
+
         Args:
             reminder_id: Reminder ID
             new_deadline: New deadline datetime
             new_reminder: New reminder datetime
-            
+
         Returns:
             True if reschedule successful
         """
@@ -275,7 +321,7 @@ class ReminderRepository:
         if not reminder:
             logger.error(f'Cannot reschedule: reminder ID {reminder_id} not found')
             return False
-        
+
         updates = {
             'previous_deadline': self._datetime_to_str(reminder.deadline_datetime),
             'deadline_datetime': self._datetime_to_str(new_deadline),
@@ -283,21 +329,21 @@ class ReminderRepository:
             'reschedule_count': reminder.reschedule_count + 1,
             'status': ReminderStatus.PENDING.value
         }
-        
+
         result = self.update(reminder_id, updates)
         if result:
             logger.success(f'Rescheduled reminder ID {reminder_id}')
         return result
-    
+
     def delete(self, reminder_id: int) -> bool:
         """Delete a reminder.
-        
+
         Args:
             reminder_id: Reminder ID
-            
+
         Returns:
             True if deletion successful
-            
+
         Raises:
             sqlite3.Error: If deletion fails
         """
@@ -305,7 +351,7 @@ class ReminderRepository:
         self.db.execute(query, (reminder_id,))
         logger.success(f'Deleted reminder ID {reminder_id}')
         return True
-    
+
     def find_existing_active(
         self,
         channel_id: str,
@@ -375,13 +421,13 @@ class ReminderRepository:
         if row:
             return self._row_to_reminder(row)
         return None
-    
+
     def _row_to_reminder(self, row: dict) -> Reminder:
         """Convert database row to Reminder object.
-        
+
         Args:
             row: Database row as dictionary
-            
+
         Returns:
             Reminder object
         """
@@ -403,14 +449,14 @@ class ReminderRepository:
             reschedule_count=row['reschedule_count'],
             previous_deadline=self._str_to_datetime(row['previous_deadline'])
         )
-    
+
     @staticmethod
     def _datetime_to_str(dt: Optional[datetime]) -> Optional[str]:
         """Convert datetime to string for database storage.
-        
+
         Args:
             dt: Datetime to convert
-            
+
         Returns:
             ISO format string or None
         """
@@ -419,14 +465,14 @@ class ReminderRepository:
         # Convert to IST and make naive for consistent storage
         dt_naive = make_naive(to_ist(dt))
         return dt_naive.isoformat()
-    
+
     @staticmethod
     def _str_to_datetime(dt_str: Optional[str]) -> Optional[datetime]:
         """Convert string to datetime from database.
-        
+
         Args:
             dt_str: ISO format datetime string
-            
+
         Returns:
             Datetime object or None
         """
