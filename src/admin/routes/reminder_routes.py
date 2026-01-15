@@ -31,7 +31,7 @@ def init_reminder_routes(settings: Settings):
     """
     global _reminder_service, _notification_service
 
-    db_manager = DBManager(settings.database_path)
+    db_manager = DBManager(settings)
     reminder_repo = ReminderRepository(db_manager)
     audit_repo = AuditRepository(db_manager)
 

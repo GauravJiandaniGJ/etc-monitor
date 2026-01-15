@@ -34,16 +34,27 @@ def health_db():
     """
     try:
         settings = Settings()
-        db_manager = DBManager(settings.database_path)
+        db_manager = DBManager(settings)
 
         # Try to execute a simple query
-        result = db_manager.fetch_one('SELECT 1')
+        if settings.database_type == 'sqlite':
+            result = db_manager.fetch_one('SELECT 1')
+        elif settings.database_type == 'postgresql':
+            result = db_manager.fetch_one('SELECT 1')
+        else:  # MySQL
+            result = db_manager.fetch_one('SELECT 1')
 
         if result:
+            db_info = {
+                'type': settings.database_type,
+                'path': settings.database_path if settings.database_type == 'sqlite' else None,
+                'host': settings.database_host if settings.database_type != 'sqlite' else None,
+                'database': settings.database_name if settings.database_type != 'sqlite' else None
+            }
             return jsonify({
                 'status': 'ok',
                 'database': 'connected',
-                'path': settings.database_path
+                **db_info
             }), 200
         else:
             return jsonify({

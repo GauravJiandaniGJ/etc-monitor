@@ -1,0 +1,18 @@
+[Unit]
+Description=ETC Monitor Slack Bot
+After=network.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/home/apps/etc-moniter
+Environment=PATH=/home/apps/etc-moniter/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ExecStart=/home/apps/etc-moniter/venv/bin/python /home/apps/etc-moniter/run_bot.py
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

@@ -49,7 +49,7 @@ class SlackBot:
 
         # Initialize database
         logger.info('Initializing database')
-        self.db_manager = DBManager(settings.database_path)
+        self.db_manager = DBManager(settings)
 
         # Run migrations
         migration_manager = MigrationManager(self.db_manager)

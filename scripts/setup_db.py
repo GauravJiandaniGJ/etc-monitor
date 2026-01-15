@@ -28,10 +28,18 @@ def main():
         init_logger(settings.log_level)
 
         logger.info('Starting database setup')
-        logger.info(f'Database path: {settings.database_path}')
+
+        # Log database info correctly
+        if settings.database_type == 'sqlite':
+            logger.info(f'Database: SQLite ({settings.database_path})')
+        else:
+            logger.info(
+                f'Database: {settings.database_type.upper()} '
+                f'{settings.database_host}:{settings.database_port}/{settings.database_name}'
+            )
 
         # Initialize database manager
-        db_manager = DBManager(settings.database_path)
+        db_manager = DBManager(settings)
         logger.success('Database manager initialized')
 
         # Initialize migration manager
@@ -40,10 +48,15 @@ def main():
 
         # Get migration status
         status = migration_manager.get_status()
-        logger.info(f'Migration status: {status["applied_count"]} applied, {status["pending_count"]} pending')
+        applied_count = len(status['applied'])
+        pending_count = len(status['pending'])
+
+        logger.info(
+            f'Migration status: {applied_count} applied, {pending_count} pending'
+        )
 
         # Run pending migrations
-        if status['pending_count'] > 0:
+        if pending_count > 0:
             logger.info('Running pending migrations...')
             migration_manager.run_pending()
             logger.success('All migrations completed successfully')
@@ -59,7 +72,7 @@ def main():
         logger.success('Database setup completed successfully')
 
     except Exception as e:
-        logger.error(f'Database setup failed: {e}', exc_info=True)
+        logger.error('Database setup failed', exc=e)
         sys.exit(1)
 
 
