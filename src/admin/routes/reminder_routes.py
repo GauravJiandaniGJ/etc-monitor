@@ -130,6 +130,17 @@ def list_reminders():
         formatted_reminders = []
         for row in rows:
             try:
+                # Helper to safely format datetime
+                def format_dt(dt_val):
+                    if not dt_val:
+                        return None
+                    if isinstance(dt_val, str):
+                        return dt_val  # Already a string
+                    try:
+                        return dt_val.isoformat()
+                    except:
+                        return str(dt_val)
+
                 formatted_reminders.append({
                     'id': row.get('id'),
                     'channel_id': row.get('channel_id'),
@@ -137,18 +148,18 @@ def list_reminders():
                     'user_id': row.get('user_id'),
                     'message_ts': row.get('message_ts'),
                     'deadline_text': row.get('deadline_text'),
-                    'deadline_datetime': row.get('deadline_datetime').isoformat() if row.get('deadline_datetime') else None,
-                    'reminder_datetime': row.get('reminder_datetime').isoformat() if row.get('reminder_datetime') else None,
+                    'deadline_datetime': format_dt(row.get('deadline_datetime')),
+                    'reminder_datetime': format_dt(row.get('reminder_datetime')),
                     'status': row.get('status'),
-                    'created_at': row.get('created_at').isoformat() if row.get('created_at') else None,
-                    'updated_at': row.get('updated_at').isoformat() if row.get('updated_at') else None,
-                    'sent_at': row.get('sent_at').isoformat() if row.get('sent_at') else None,
+                    'created_at': format_dt(row.get('created_at')),
+                    'updated_at': format_dt(row.get('updated_at')),
+                    'sent_at': format_dt(row.get('sent_at')),
                     'retry_count': row.get('retry_count', 0),
                     'reschedule_count': row.get('reschedule_count', 0),
-                    'previous_deadline': row.get('previous_deadline').isoformat() if row.get('previous_deadline') else None
+                    'previous_deadline': format_dt(row.get('previous_deadline'))
                 })
             except Exception as e:
-                logger.warning(f'Error formatting reminder row: {e}')
+                logger.warning(f'Error formatting reminder row: {e}', exc=e)
                 continue
 
         elapsed = time.time() - start_time
