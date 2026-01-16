@@ -72,12 +72,15 @@ class DBManager:
                        self.settings.database_user, self.settings.database_password]):
                 raise ValueError('PostgreSQL requires DATABASE_HOST, DATABASE_NAME, DATABASE_USER, and DATABASE_PASSWORD')
 
+            # Add connection timeout and statement timeout to prevent hanging
             self.connection_string = (
                 f"host={self.settings.database_host} "
                 f"port={self.settings.database_port} "
                 f"dbname={self.settings.database_name} "
                 f"user={self.settings.database_user} "
-                f"password={self.settings.database_password}"
+                f"password={self.settings.database_password} "
+                f"connect_timeout=10 "
+                f"options='-c statement_timeout=30s'"
             )
         logger.info(f'Database manager initialized: PostgreSQL at {self.settings.database_host}:{self.settings.database_port}/{self.settings.database_name}')
 
@@ -134,7 +137,12 @@ class DBManager:
 
                 elif self.database_type == 'postgresql':
                     self._local.connection = psycopg2.connect(self.connection_string)
-                    self._local.connection.autocommit = False
+                    # Enable autocommit for PostgreSQL to avoid blocking on read queries
+                    # Explicit transactions can still be used when needed
+                    self._local.connection.autocommit = True
+                    # Set statement timeout to prevent queries from hanging indefinitely
+                    with self._local.connection.cursor() as cursor:
+                        cursor.execute("SET statement_timeout = '30s'")
 
                 elif self.database_type == 'mysql':
                     if MYSQL_DRIVER == 'pymysql':
@@ -165,14 +173,23 @@ class DBManager:
             Database connection object
         """
         conn = self._get_connection()
+        # For PostgreSQL with autocommit=True, we don't need commit/rollback
+        # For other databases or when autocommit=False, handle transactions
+        needs_transaction = (
+            self.database_type != 'postgresql' or
+            (hasattr(conn, 'autocommit') and not conn.autocommit)
+        )
+
         try:
             yield conn
         except Exception as e:
-            conn.rollback()
+            if needs_transaction:
+                conn.rollback()
             logger.error(f'Database operation failed, rolled back', exc=e)
             raise
         else:
-            conn.commit()
+            if needs_transaction:
+                conn.commit()
 
     def _get_cursor(self, conn):
         """Get appropriate cursor for database type.
