@@ -1,6 +1,8 @@
-"""Reminder management routes for admin panel."""
+"""Reminder management routes for admin panel - Production Optimized."""
 from flask import Blueprint, jsonify, request
 from typing import Optional
+from functools import wraps
+import time
 from src.database.db_manager import DBManager
 from src.database.repositories.reminder_repository import ReminderRepository
 from src.database.repositories.audit_repository import AuditRepository
@@ -9,7 +11,6 @@ from src.services.notification_service import NotificationService
 from src.core.models import ReminderStatus
 from config.settings import Settings
 from src.utils.logger import get_logger
-from src.utils.timezone import now_ist, format_datetime_friendly
 from slack_sdk import WebClient
 
 
@@ -46,61 +47,84 @@ def init_reminder_routes(settings: Settings):
     logger.info('Reminder routes initialized')
 
 
+def timing_middleware(func):
+    """Middleware to log request timing."""
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        start = time.time()
+        try:
+            result = func(*args, **kwargs)
+            elapsed = time.time() - start
+            logger.info(f'{func.__name__} completed in {elapsed:.3f}s')
+            return result
+        except Exception as e:
+            elapsed = time.time() - start
+            logger.error(f'{func.__name__} failed after {elapsed:.3f}s: {e}')
+            raise
+    return wrapper
+
+
 @reminder_bp.route('/api/reminders', methods=['GET'])
+@timing_middleware
 def list_reminders():
-    """List all reminders with optional filters.
+    """List all reminders with optional filters - Production Optimized.
 
     Query parameters:
         - status: Filter by status (pending, sent, cancelled, failed, rescheduled)
         - user_id: Filter by user ID
         - channel_id: Filter by channel ID
-        - limit: Maximum number of results (default: 100)
+        - limit: Maximum number of results (default: 100, max: 1000)
         - offset: Offset for pagination (default: 0)
 
     Returns:
-        JSON response with list of reminders
+        JSON response with list of reminders and stats
     """
     try:
+        # Parse and validate parameters
         status_filter = request.args.get('status')
         user_id_filter = request.args.get('user_id')
         channel_id_filter = request.args.get('channel_id')
-        limit = int(request.args.get('limit', 100))
-        offset = int(request.args.get('offset', 0))
+        limit = min(int(request.args.get('limit', 100)), 1000)  # Cap at 1000
+        offset = max(int(request.args.get('offset', 0)), 0)
 
         logger.info(f'Listing reminders - status: {status_filter}, limit: {limit}, offset: {offset}')
 
-        # Get total count and status counts efficiently
-        # We need to count all reminders matching the filters, not just the returned ones
         db_manager = _reminder_service.reminder_repo.db
-
-        # Build count query based on filters (use parameterized queries)
         placeholder = '%s' if db_manager.database_type != 'sqlite' else '?'
-        count_conditions = []
-        count_params = []
+
+        # Build WHERE clause efficiently
+        where_conditions = []
+        params = []
 
         if status_filter:
-            count_conditions.append(f'status = {placeholder}')
-            count_params.append(status_filter)
+            where_conditions.append(f'status = {placeholder}')
+            params.append(status_filter)
         if user_id_filter:
-            count_conditions.append(f'user_id = {placeholder}')
-            count_params.append(user_id_filter)
+            where_conditions.append(f'user_id = {placeholder}')
+            params.append(user_id_filter)
         if channel_id_filter:
-            count_conditions.append(f'channel_id = {placeholder}')
-            count_params.append(channel_id_filter)
+            where_conditions.append(f'channel_id = {placeholder}')
+            params.append(channel_id_filter)
 
-        # Build final count query
-        where_clause = ' AND '.join(count_conditions) if count_conditions else '1=1'
+        where_clause = ' AND '.join(where_conditions) if where_conditions else '1=1'
+
+        # OPTIMIZATION: Use efficient queries with proper pagination
+        # Get reminders with pagination (single optimized query)
+        reminders_query = f'''
+            SELECT * FROM reminders
+            WHERE {where_clause}
+            ORDER BY created_at DESC
+            LIMIT {placeholder} OFFSET {placeholder}
+        '''
+        reminders_params = tuple(params) + (limit, offset)
+
+        # Get total count (single query)
         count_query = f'SELECT COUNT(*) as count FROM reminders WHERE {where_clause}'
+        count_params = tuple(params) if params else None
 
-        # Get total count
-        count_result = db_manager.fetch_one(count_query, tuple(count_params) if count_params else None)
-        total = count_result['count'] if count_result else 0
-
-        # Get status counts for accurate dashboard stats (only if no filters)
-        # Use a single GROUP BY query instead of 5 separate queries for performance
+        # Get status counts (only if no filters for dashboard - single GROUP BY query)
         status_counts = {'pending': 0, 'sent': 0, 'cancelled': 0, 'failed': 0, 'rescheduled': 0}
         if not status_filter and not user_id_filter and not channel_id_filter:
-            # Single query to get all status counts at once
             status_query = '''
                 SELECT status, COUNT(*) as count
                 FROM reminders
@@ -115,49 +139,26 @@ def list_reminders():
                 ('pending', 'sent', 'cancelled', 'failed', 'rescheduled')
             )
 
-            # Map results to status_counts dict
             for row in status_results:
                 status = row.get('status') or row.get('STATUS')
                 count = row.get('count') or row.get('COUNT')
-                if status in status_counts:
-                    status_counts[status] = count
+                if status in status_counts and count is not None:
+                    status_counts[status] = int(count)
 
-        # Get all reminders (or a large batch if filtering)
-        # If filtering, we need to get more to ensure we have enough after filter
-        # Otherwise, respect the limit for performance
-        if status_filter or user_id_filter or channel_id_filter:
-            # When filtering, get a large batch to ensure enough results
-            fetch_limit = min(limit * 20, 10000)  # Cap at 10k for safety
-            all_reminders = _reminder_service.reminder_repo.get_all(limit=fetch_limit)
-            logger.info(f'Fetched {len(all_reminders)} reminders from database (with filters)')
-        else:
-            # No filters, respect the limit
-            all_reminders = _reminder_service.reminder_repo.get_all(limit=limit, offset=offset)
-            logger.info(f'Fetched {len(all_reminders)} reminders from database (no filters)')
+        # Execute queries efficiently
+        rows = db_manager.fetch_all(reminders_query, reminders_params)
+        count_result = db_manager.fetch_one(count_query, count_params)
+        total = count_result['count'] if count_result else 0
 
-        # Apply status filter
-        if status_filter:
-            reminders = [r for r in all_reminders if r.status.value == status_filter]
-        else:
-            reminders = all_reminders
+        # Format reminders efficiently
+        reminders = [_format_reminder(_reminder_service.reminder_repo._row_to_reminder(row)) for row in rows]
 
-        # Apply additional filters
-        if user_id_filter:
-            reminders = [r for r in reminders if r.user_id == user_id_filter]
-        if channel_id_filter:
-            reminders = [r for r in reminders if r.channel_id == channel_id_filter]
-
-        # Apply pagination (only if we filtered, otherwise already paginated)
-        if status_filter or user_id_filter or channel_id_filter:
-            reminders = reminders[offset:offset + limit]
-
-        # Format response
         result = {
             'total': total,
             'limit': limit,
             'offset': offset,
-            'reminders': [_format_reminder(r) for r in reminders],
-            'stats': status_counts  # Include status counts for dashboard
+            'reminders': reminders,
+            'stats': status_counts
         }
 
         logger.info(f'Returning {len(reminders)} reminders (total: {total})')
@@ -165,9 +166,7 @@ def list_reminders():
 
     except Exception as e:
         logger.error(f'Error listing reminders: {e}', exc=e)
-        import traceback
-        logger.error(f'Traceback: {traceback.format_exc()}')
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': 'Internal server error'}), 500
 
 
 @reminder_bp.route('/api/reminders/<int:reminder_id>', methods=['GET'])
@@ -225,17 +224,17 @@ def update_reminder(reminder_id: int):
                 return jsonify({'error': f'Invalid status: {status_str}'}), 400
 
         if 'deadline_datetime' in data:
-            from datetime import datetime
+            from datetime import datetime as dt
             try:
-                deadline = datetime.fromisoformat(data['deadline_datetime'])
+                deadline = dt.fromisoformat(data['deadline_datetime'])
                 updates['deadline_datetime'] = deadline
             except ValueError:
                 return jsonify({'error': 'Invalid deadline_datetime format'}), 400
 
         if 'reminder_datetime' in data:
-            from datetime import datetime
+            from datetime import datetime as dt
             try:
-                reminder_time = datetime.fromisoformat(data['reminder_datetime'])
+                reminder_time = dt.fromisoformat(data['reminder_datetime'])
                 updates['reminder_datetime'] = reminder_time
             except ValueError:
                 return jsonify({'error': 'Invalid reminder_datetime format'}), 400

@@ -466,14 +466,6 @@ def create_app(settings: Optional[Settings] = None) -> Flask:
                             <button class="tab active" onclick="showTab('all')">All Reminders</button>
                             <button class="tab" onclick="showTab('pending')">Pending Only</button>
                         </div>
-                        <button class="btn" onclick="loadReminders(); if (currentTab === 'pending') loadPendingReminders();" style="background: var(--primary); color: white; padding: 0.5rem 1rem; border-radius: 6px; border: none; cursor: pointer; font-weight: 500; display: flex; align-items: center; gap: 0.5rem;" title="Refresh reminders">
-                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                                <polyline points="23 4 23 10 17 10"></polyline>
-                                <polyline points="1 20 1 14 7 14"></polyline>
-                                <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
-                            </svg>
-                            Refresh
-                        </button>
                     </div>
                 </div>
 

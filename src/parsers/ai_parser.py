@@ -1,11 +1,11 @@
 """
 AI-based ETC (Estimated Time of Completion) deadline parser using Gemini AI.
 
-This module is production-hardened for real-world human messages:
-- Slack / WhatsApp / Jira / Comments / Threads
-- Handles new ETCs, updates, cancellations
-- Aggressive detection with strict false-positive control
-- Deterministic JSON-only AI responses
+Production-grade implementation with:
+- Fast async processing with proper timeout handling
+- Always-on AI parsing (no skipping)
+- Robust error handling and fallback
+- Optimized for real-time responses
 """
 
 import json
@@ -13,6 +13,7 @@ import re
 from datetime import datetime
 from typing import Optional, Dict
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
+import threading
 
 from src.core.models import ParsedDeadline
 from src.utils.logger import get_logger
@@ -31,13 +32,13 @@ except ImportError:
 
 class AIParser:
     """
-    Senior-grade AI-based ETC parser.
+    Production-grade AI-based ETC parser.
 
-    Design goals:
-    - Precision > Recall
-    - Zero hallucinations
-    - Safe for threaded updates
-    - Day-2 operations ready
+    Design principles:
+    - Always use AI first (no skipping)
+    - Fast timeout (5 seconds max)
+    - Robust error handling
+    - Thread-safe execution
     """
 
     def __init__(
@@ -47,17 +48,28 @@ class AIParser:
         temperature: float = 0.15,
         timeout_seconds: int = 5,
     ):
+        """Initialize AI parser.
+
+        Args:
+            api_key: Gemini API key
+            model: Gemini model name
+            temperature: Model temperature (0.0-1.0)
+            timeout_seconds: Maximum time to wait for AI response
+        """
         self.api_key = api_key
         self.model = model
         self.temperature = temperature
-        self.timeout_seconds = 8  # Increased to 8 seconds for reliable AI processing
+        self.timeout_seconds = timeout_seconds
         self.client = None
+        self._executor = ThreadPoolExecutor(max_workers=3, thread_name_prefix="ai-parser")
+        self._lock = threading.Lock()
 
         if not GEMINI_AVAILABLE:
+            logger.warning("Gemini library not available")
             return
 
         if not api_key:
-            logger.info("Gemini API key not configured")
+            logger.warning("Gemini API key not configured")
             return
 
         try:
@@ -66,56 +78,64 @@ class AIParser:
                 model_name=model,
                 generation_config={
                     "temperature": temperature,
-                    "max_output_tokens": 1024,
+                    "max_output_tokens": 512,  # Reduced for faster responses
                 },
             )
-            logger.success(f"Gemini initialized: {model}")
+            logger.success(f"Gemini AI initialized: {model} (timeout: {timeout_seconds}s)")
         except Exception as e:
             logger.error("Failed to initialize Gemini", exc=e)
             self.client = None
 
     def is_available(self) -> bool:
+        """Check if AI parser is available."""
         return self.client is not None
-
-    # ------------------------------------------------------------------
-    # PUBLIC API
-    # ------------------------------------------------------------------
 
     def parse_deadline(
         self, text: str, reference_time: Optional[datetime] = None
     ) -> Optional[ParsedDeadline]:
         """
-        Full ETC parsing entry point.
-        Returns ParsedDeadline or None.
+        Parse ETC deadline from text using AI.
+
+        Args:
+            text: Message text to parse
+            reference_time: Reference time for relative dates
+
+        Returns:
+            ParsedDeadline or None if parsing fails
         """
         if not self.is_available() or not text:
             return None
 
         now = reference_time or now_ist()
-
         result = self._call_ai(text, now)
+
         if not result or not result.get("has_deadline"):
             return None
 
         confidence = float(result.get("confidence", 0.0))
-
         if confidence < 0.6:
+            logger.debug(f"AI confidence too low: {confidence}")
             return None
 
-        # Extract deadline text from AI response
         deadline_text = result.get("deadline_text", text)
 
         return ParsedDeadline(
-            original_text=deadline_text,  # Store AI-extracted text
-            deadline_datetime=now,     # resolved later by datetime parser
-            reminder_datetime=now,     # calculated later
+            original_text=deadline_text,
+            deadline_datetime=now,  # Will be resolved by datetime parser
+            reminder_datetime=now,   # Will be calculated later
             confidence=confidence,
             parsed_by="ai"
         )
 
     def get_deadline_text(self, text: str) -> Optional[str]:
         """
-        Lightweight helper: extract only deadline text.
+        Extract deadline text from message (lightweight).
+
+        Args:
+            text: Message text
+
+        Returns:
+            Extracted deadline text or None
         """
         if not self.is_available() or not text:
             return None
@@ -123,197 +143,94 @@ class AIParser:
         result = self._call_ai(text, now_ist())
         if result and result.get("has_deadline"):
             return result.get("deadline_text")
-
         return None
 
-    # ------------------------------------------------------------------
-    # AI EXECUTION
-    # ------------------------------------------------------------------
-
     def _call_ai(self, text: str, now: datetime) -> Optional[Dict]:
-        logger.info(f'[AI] Calling Gemini API for text: "{text[:100]}..."')
-        logger.info(f'[AI] Full message length: {len(text)} characters')
+        """
+        Call Gemini AI with timeout protection.
+
+        Args:
+            text: Message text
+            now: Current time
+
+        Returns:
+            Parsed result dict or None
+        """
+        logger.info(f'[AI] Processing: "{text[:80]}..."')
+
         prompt = self._build_prompt(text, now)
 
-        def run():
-            return self.client.generate_content(prompt)
-
-        executor = ThreadPoolExecutor(max_workers=1)
+        def run_ai():
+            """Execute AI call in thread."""
+            try:
+                response = self.client.generate_content(prompt)
+                return response
+            except Exception as e:
+                logger.error(f'[AI] Gemini API error: {e}')
+                raise
 
         try:
-            future = executor.submit(run)
+            future = self._executor.submit(run_ai)
             response = future.result(timeout=self.timeout_seconds)
         except FutureTimeoutError:
-            logger.warning(f'[AI] Gemini timeout after {self.timeout_seconds} seconds')
+            logger.warning(f'[AI] Timeout after {self.timeout_seconds}s')
             return None
         except Exception as e:
-            logger.error(f'[AI] Gemini execution failed: {e}', exc=e)
+            logger.error(f'[AI] Execution failed: {e}', exc=e)
             return None
-        finally:
-            executor.shutdown(wait=False)
 
         if not response or not response.text:
-            logger.warning('[AI] Gemini returned empty response')
+            logger.warning('[AI] Empty response from Gemini')
             return None
 
-        logger.info(f'[AI] Received response from Gemini: {len(response.text)} characters')
         result = self._parse_response(response.text)
         if result and result.get("has_deadline"):
-            deadline_text = result.get("deadline_text")
+            deadline_text = result.get("deadline_text", "")
             confidence = result.get("confidence", 0.0)
-            logger.success(f'[AI] Successfully extracted deadline: "{deadline_text}" (confidence: {confidence})')
+            logger.success(f'[AI] Extracted: "{deadline_text}" (confidence: {confidence:.2f})')
         else:
-            logger.warning(f'[AI] Did not find deadline in response. Result: {result}')
+            logger.debug('[AI] No deadline found in response')
+
         return result
 
-    # ------------------------------------------------------------------
-    # PROMPT (MAX-STRENGTH)
-    # ------------------------------------------------------------------
-
     def _build_prompt(self, text: str, now: datetime) -> str:
-        return f"""
-You are a SENIOR ETC (Estimated Time of Completion) INTENT PARSER with 15+ years of experience building production-grade systems.
+        """Build optimized prompt for Gemini."""
+        return f"""You are an ETC (Estimated Time of Completion) parser. Extract deadline commitments from messages.
 
-Your responsibility is STRICT detection of deadline commitments.
-False positives are worse than misses.
+Current: {now.strftime('%Y-%m-%d %H:%M:%S')} IST
 
-────────────────────────────────
-SYSTEM CONTEXT (AUTHORITATIVE)
-────────────────────────────────
-Current date: {now.strftime('%Y-%m-%d')}
-Current day: {now.strftime('%A')}
-Current time: {now.strftime('%H:%M:%S')}
-Timezone: Asia/Kolkata (IST)
+Message: {text}
 
-────────────────────────────────
-USER MESSAGE (RAW)
-────────────────────────────────
-{text}
+Rules:
+- Extract ONLY if user commits to a completion time
+- Support: "ETC 2 mins", "etc is 2 hours", "my etc for project is 5 hours", "within 3 hours", "with in 5 hours" (typo)
+- Return JSON only, no markdown
 
-────────────────────────────────
-WHAT QUALIFIES AS ETC
-────────────────────────────────
-A message qualifies ONLY if the user is:
-• Committing to a completion time
-• Updating a previous commitment
-• Explicitly cancelling an earlier ETC
-
-DO NOT extract if:
-• The message is a question
-• The message is speculative
-• The message is historical
-• The message is conditional
-
-────────────────────────────────
-VALID ETC SIGNALS
-────────────────────────────────
-Explicit:
-ETC:, ETA:, etc is, etc of, etc for, delivery by, will finish by
-
-Natural Language (CRITICAL - DETECT THESE):
-"My etc for this project is of 2 hours" → extract "2 hours"
-"My etc for this project is with in 5 hours" → extract "5 hours" (handle "with in" typo)
-"My etc for this project is within 5 hours" → extract "5 hours"
-"The etc for this task is 5 mins" → extract "5 mins"
-"My etc is of 3 hours" → extract "3 hours"
-"etc for this project is of 1 hour" → extract "1 hour"
-"etc is 2 hours" → extract "2 hours"
-"etc of 30 mins" → extract "30 mins"
-"my etc for project is 2 hours" → extract "2 hours"
-
-Implicit:
-"I'll take 30 mins"
-"Wrapping up in an hour"
-"Should be done by evening"
-"Need 2 hours"
-
-Updates:
-"Updated ETC"
-"Revised ETA"
-"Change it to tomorrow"
-"Actually make it 45 mins"
-
-Cancellations:
-"Ignore previous ETC"
-"No ETC now"
-"Cancel the deadline"
-"Removing ETA"
-
-────────────────────────────────
-TIME EXPRESSIONS TO SUPPORT
-────────────────────────────────
-Relative:
-2 min, 2 mins, 2m, half hour, in 30 mins, within 1 hour, with in 5 hours (typo for "within")
-
-Absolute:
-today 5pm, tomorrow 3pm, friday EOD, next monday morning,
-25 Dec 10am, 2025-01-15 17:00
-
-Business terms:
-EOD / COB = preserve as text (DO NOT convert)
-
-Time-of-day:
-morning=9am, afternoon=2pm, evening=7pm, night=9pm
-
-────────────────────────────────
-MULTIPLE TIMES RULE
-────────────────────────────────
-If multiple times exist:
-• Prefer explicit over vague
-• Prefer updated over original
-• Prefer later correction
-
-────────────────────────────────
-NORMALIZATION
-────────────────────────────────
-Allowed:
-"2min" → "2 min"
-"5pm" → "5 pm"
-
-Forbidden:
-• Datetime conversion
-• Unit removal
-• Guessing missing info
-
-────────────────────────────────
-CONFIDENCE SCORING
-────────────────────────────────
-0.95+ → explicit ETC
-0.80 → clear but informal
-0.60 → weak but actionable
-<0.60 → do NOT extract
-
-────────────────────────────────
-OUTPUT FORMAT (JSON ONLY)
-────────────────────────────────
+Output JSON:
 {{
-  "has_deadline": true | false,
-  "deadline_text": "exact phrase or null",
+  "has_deadline": true/false,
+  "deadline_text": "exact time phrase or null",
   "confidence": 0.0-1.0,
-  "intent": "new | update | cancel | none",
-  "reason": "short factual explanation"
+  "intent": "new|update|cancel|none"
 }}
 
-ABSOLUTE RULES:
-• JSON only
-• No markdown
-• No extra text
-• If unsure → has_deadline=false
-"""
-
-    # ------------------------------------------------------------------
-    # RESPONSE PARSING
-    # ------------------------------------------------------------------
+If unsure, has_deadline=false."""
 
     def _parse_response(self, response_text: str) -> Optional[Dict]:
+        """Parse JSON from Gemini response."""
         try:
             content = response_text.strip()
 
+            # Remove markdown code blocks if present
             if "```" in content:
-                content = re.sub(r"```.*?```", "", content, flags=re.S).strip()
+                content = re.sub(r"```(?:json)?\s*", "", content, flags=re.IGNORECASE)
+                content = re.sub(r"```\s*", "", content)
+                content = content.strip()
 
-            match = re.search(r"\{.*\}", content, re.S)
+            # Extract JSON object
+            match = re.search(r"\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}", content, re.S)
             if not match:
+                logger.warning(f"[AI] No JSON found in response: {content[:200]}")
                 return None
 
             data = json.loads(match.group(0))
@@ -323,6 +240,14 @@ ABSOLUTE RULES:
 
             return data
 
-        except Exception as e:
-            logger.warning(f"Failed to parse Gemini JSON: {e}")
+        except json.JSONDecodeError as e:
+            logger.warning(f"[AI] JSON parse error: {e}, response: {response_text[:200]}")
             return None
+        except Exception as e:
+            logger.error(f"[AI] Parse error: {e}", exc=e)
+            return None
+
+    def __del__(self):
+        """Cleanup executor on destruction."""
+        if hasattr(self, '_executor'):
+            self._executor.shutdown(wait=False)
