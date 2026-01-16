@@ -69,7 +69,7 @@ def list_reminders():
 
         logger.info(f'Listing reminders - status: {status_filter}, limit: {limit}, offset: {offset}')
 
-        # Get total count first (for accurate stats)
+        # Get total count and status counts efficiently
         # We need to count all reminders matching the filters, not just the returned ones
         db_manager = _reminder_service.reminder_repo.db
 
@@ -97,13 +97,30 @@ def list_reminders():
         total = count_result['count'] if count_result else 0
 
         # Get status counts for accurate dashboard stats (only if no filters)
+        # Use a single GROUP BY query instead of 5 separate queries for performance
         status_counts = {'pending': 0, 'sent': 0, 'cancelled': 0, 'failed': 0, 'rescheduled': 0}
         if not status_filter and not user_id_filter and not channel_id_filter:
-            # Get counts for each status
-            for status in ['pending', 'sent', 'cancelled', 'failed', 'rescheduled']:
-                status_query = f'SELECT COUNT(*) as count FROM reminders WHERE status = {placeholder}'
-                status_result = db_manager.fetch_one(status_query, (status,))
-                status_counts[status] = status_result['count'] if status_result else 0
+            # Single query to get all status counts at once
+            status_query = '''
+                SELECT status, COUNT(*) as count
+                FROM reminders
+                WHERE status IN (?, ?, ?, ?, ?)
+                GROUP BY status
+            '''
+            if db_manager.database_type != 'sqlite':
+                status_query = status_query.replace('?', '%s')
+
+            status_results = db_manager.fetch_all(
+                status_query,
+                ('pending', 'sent', 'cancelled', 'failed', 'rescheduled')
+            )
+
+            # Map results to status_counts dict
+            for row in status_results:
+                status = row.get('status') or row.get('STATUS')
+                count = row.get('count') or row.get('COUNT')
+                if status in status_counts:
+                    status_counts[status] = count
 
         # Get all reminders (or a large batch if filtering)
         # If filtering, we need to get more to ensure we have enough after filter
