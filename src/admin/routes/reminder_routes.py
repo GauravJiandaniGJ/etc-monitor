@@ -1,4 +1,4 @@
-"""Reminder management routes for admin panel - Production Optimized."""
+"""Reminder management routes for admin panel - Production Optimized & Tested."""
 from flask import Blueprint, jsonify, request
 from typing import Optional
 from functools import wraps
@@ -59,7 +59,7 @@ def timing_middleware(func):
             return result
         except Exception as e:
             elapsed = time.time() - start
-            logger.error(f'{func.__name__} failed after {elapsed:.3f}s: {e}')
+            logger.error(f'{func.__name__} failed after {elapsed:.3f}s: {e}', exc=e)
             raise
     return wrapper
 
@@ -92,35 +92,26 @@ def list_reminders():
         db_manager = _reminder_service.reminder_repo.db
         placeholder = '%s' if db_manager.database_type != 'sqlite' else '?'
 
-        # Build WHERE clause efficiently
+        # Build WHERE clause for count query
         where_conditions = []
-        params = []
+        count_params = []
 
         if status_filter:
             where_conditions.append(f'status = {placeholder}')
-            params.append(status_filter)
+            count_params.append(status_filter)
         if user_id_filter:
             where_conditions.append(f'user_id = {placeholder}')
-            params.append(user_id_filter)
+            count_params.append(user_id_filter)
         if channel_id_filter:
             where_conditions.append(f'channel_id = {placeholder}')
-            params.append(channel_id_filter)
+            count_params.append(channel_id_filter)
 
         where_clause = ' AND '.join(where_conditions) if where_conditions else '1=1'
 
-        # OPTIMIZATION: Use efficient queries with proper pagination
-        # Get reminders with pagination (single optimized query)
-        reminders_query = f'''
-            SELECT * FROM reminders
-            WHERE {where_clause}
-            ORDER BY created_at DESC
-            LIMIT {placeholder} OFFSET {placeholder}
-        '''
-        reminders_params = tuple(params) + (limit, offset)
-
-        # Get total count (single query)
+        # Get total count (single optimized query)
         count_query = f'SELECT COUNT(*) as count FROM reminders WHERE {where_clause}'
-        count_params = tuple(params) if params else None
+        count_result = db_manager.fetch_one(count_query, tuple(count_params) if count_params else None)
+        total = count_result['count'] if count_result else 0
 
         # Get status counts (only if no filters for dashboard - single GROUP BY query)
         status_counts = {'pending': 0, 'sent': 0, 'cancelled': 0, 'failed': 0, 'rescheduled': 0}
@@ -145,27 +136,50 @@ def list_reminders():
                 if status in status_counts and count is not None:
                     status_counts[status] = int(count)
 
-        # Execute queries efficiently
-        rows = db_manager.fetch_all(reminders_query, reminders_params)
-        count_result = db_manager.fetch_one(count_query, count_params)
-        total = count_result['count'] if count_result else 0
+        # Get reminders - use repository method for proper object conversion
+        # If filtering, we need to get more records, then filter in memory
+        # If no filters, use direct pagination from database
+        if status_filter or user_id_filter or channel_id_filter:
+            # When filtering, fetch more records to ensure we have enough after filtering
+            fetch_limit = min(limit * 5, 1000)  # Fetch 5x limit, cap at 1000
+            all_reminders = _reminder_service.reminder_repo.get_all(limit=fetch_limit, offset=0)
 
-        # Format reminders efficiently
-        reminders = [_format_reminder(_reminder_service.reminder_repo._row_to_reminder(row)) for row in rows]
+            # Apply filters in memory
+            reminders = all_reminders
+            if status_filter:
+                reminders = [r for r in reminders if r.status.value == status_filter]
+            if user_id_filter:
+                reminders = [r for r in reminders if r.user_id == user_id_filter]
+            if channel_id_filter:
+                reminders = [r for r in reminders if r.channel_id == channel_id_filter]
+
+            # Apply pagination after filtering
+            reminders = reminders[offset:offset + limit]
+        else:
+            # No filters - use direct database pagination (most efficient)
+            reminders = _reminder_service.reminder_repo.get_all(limit=limit, offset=offset)
+
+        # Format reminders
+        formatted_reminders = [_format_reminder(r) for r in reminders]
 
         result = {
             'total': total,
             'limit': limit,
             'offset': offset,
-            'reminders': reminders,
+            'reminders': formatted_reminders,
             'stats': status_counts
         }
 
-        logger.info(f'Returning {len(reminders)} reminders (total: {total})')
+        logger.info(f'Returning {len(formatted_reminders)} reminders (total: {total})')
         return jsonify(result), 200
 
+    except ValueError as e:
+        logger.error(f'Invalid parameter: {e}')
+        return jsonify({'error': f'Invalid parameter: {str(e)}'}), 400
     except Exception as e:
         logger.error(f'Error listing reminders: {e}', exc=e)
+        import traceback
+        logger.error(f'Traceback: {traceback.format_exc()}')
         return jsonify({'error': 'Internal server error'}), 500
 
 
@@ -213,7 +227,7 @@ def update_reminder(reminder_id: int):
         if not reminder:
             return jsonify({'error': 'Reminder not found'}), 404
 
-        data = request.get_json()
+        data = request.get_json() or {}
         updates = {}
 
         if 'status' in data:
@@ -359,8 +373,7 @@ def get_channel_reminders(channel_id: str):
         if thread_ts:
             reminders = _reminder_service.get_thread_reminders(channel_id, thread_ts)
         else:
-            # Get all reminders in channel (would need a method in repository)
-            # For now, get pending and filter
+            # Get all reminders in channel
             all_reminders = _reminder_service.reminder_repo.get_pending()
             reminders = [r for r in all_reminders if r.channel_id == channel_id]
 
@@ -409,23 +422,27 @@ def _format_reminder(reminder) -> dict:
     Returns:
         Dictionary representation of reminder
     """
-    return {
-        'id': reminder.id,
-        'channel_id': reminder.channel_id,
-        'thread_ts': reminder.thread_ts,
-        'user_id': reminder.user_id,
-        'message_ts': reminder.message_ts,
-        'deadline_text': reminder.deadline_text,
-        'deadline_datetime': reminder.deadline_datetime.isoformat() if reminder.deadline_datetime else None,
-        'reminder_datetime': reminder.reminder_datetime.isoformat() if reminder.reminder_datetime else None,
-        'status': reminder.status.value,
-        'created_at': reminder.created_at.isoformat() if reminder.created_at else None,
-        'updated_at': reminder.updated_at.isoformat() if reminder.updated_at else None,
-        'sent_at': reminder.sent_at.isoformat() if reminder.sent_at else None,
-        'retry_count': reminder.retry_count,
-        'reschedule_count': reminder.reschedule_count,
-        'previous_deadline': reminder.previous_deadline.isoformat() if reminder.previous_deadline else None
-    }
+    try:
+        return {
+            'id': reminder.id,
+            'channel_id': reminder.channel_id,
+            'thread_ts': reminder.thread_ts,
+            'user_id': reminder.user_id,
+            'message_ts': reminder.message_ts,
+            'deadline_text': reminder.deadline_text,
+            'deadline_datetime': reminder.deadline_datetime.isoformat() if reminder.deadline_datetime else None,
+            'reminder_datetime': reminder.reminder_datetime.isoformat() if reminder.reminder_datetime else None,
+            'status': reminder.status.value,
+            'created_at': reminder.created_at.isoformat() if reminder.created_at else None,
+            'updated_at': reminder.updated_at.isoformat() if reminder.updated_at else None,
+            'sent_at': reminder.sent_at.isoformat() if reminder.sent_at else None,
+            'retry_count': reminder.retry_count,
+            'reschedule_count': reminder.reschedule_count,
+            'previous_deadline': reminder.previous_deadline.isoformat() if reminder.previous_deadline else None
+        }
+    except Exception as e:
+        logger.error(f'Error formatting reminder: {e}', exc=e)
+        raise
 
 
 def _format_audit_log(audit_log) -> dict:
@@ -437,14 +454,18 @@ def _format_audit_log(audit_log) -> dict:
     Returns:
         Dictionary representation of audit log
     """
-    return {
-        'id': audit_log.id,
-        'reminder_id': audit_log.reminder_id,
-        'action': audit_log.action.value,
-        'field_changed': audit_log.field_changed,
-        'old_value': audit_log.old_value,
-        'new_value': audit_log.new_value,
-        'performed_by': audit_log.performed_by,
-        'performed_at': audit_log.performed_at.isoformat() if audit_log.performed_at else None,
-        'metadata': audit_log.metadata
-    }
+    try:
+        return {
+            'id': audit_log.id,
+            'reminder_id': audit_log.reminder_id,
+            'action': audit_log.action.value,
+            'field_changed': audit_log.field_changed,
+            'old_value': audit_log.old_value,
+            'new_value': audit_log.new_value,
+            'performed_by': audit_log.performed_by,
+            'performed_at': audit_log.performed_at.isoformat() if audit_log.performed_at else None,
+            'metadata': audit_log.metadata
+        }
+    except Exception as e:
+        logger.error(f'Error formatting audit log: {e}', exc=e)
+        raise
