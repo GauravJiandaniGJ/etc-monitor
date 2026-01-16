@@ -42,7 +42,7 @@ def health_db():
         elif settings.database_type == 'postgresql':
             result = db_manager.fetch_one('SELECT 1')
         else:  # MySQL
-            result = db_manager.fetch_one('SELECT 1')
+        result = db_manager.fetch_one('SELECT 1')
 
         if result:
             db_info = {

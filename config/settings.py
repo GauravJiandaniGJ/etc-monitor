@@ -63,7 +63,7 @@ class Settings:
 
         if self.database_type == 'sqlite':
             # SQLite configuration
-            self.database_path = os.environ.get('DATABASE_PATH', 'reminders.db')
+        self.database_path = os.environ.get('DATABASE_PATH', 'reminders.db')
         else:
             # PostgreSQL/MySQL configuration
             self.database_host = os.environ.get('DATABASE_HOST')
@@ -140,7 +140,7 @@ class Settings:
         print(f'  - Gemini Model: {self.gemini_model}')
         if self.database_type == 'sqlite':
             print(f'  - Database Type: SQLite')
-            print(f'  - Database Path: {self.database_path}')
+        print(f'  - Database Path: {self.database_path}')
         else:
             print(f'  - Database Type: {self.database_type.upper()}')
             print(f'  - Database Host: {self.database_host}:{self.database_port}')
