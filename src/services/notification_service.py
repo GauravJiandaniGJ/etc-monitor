@@ -165,7 +165,7 @@ class NotificationService:
 
             message = (
                 f"Reminder {action}!\n"
-                f"Deadline: {deadline_str}\n"
+                f"Estimated completion: {deadline_str}\n"
                 f"{reminder_msg}"
             )
 
@@ -215,7 +215,7 @@ class NotificationService:
             deadline_str = format_datetime_friendly(reminder.deadline_datetime)
             message = (
                 f"Reminder cancelled.\n"
-                f"Original deadline: {deadline_str}"
+                f"Original estimated completion: {deadline_str}"
             )
 
             # CRITICAL: All cancellations MUST be in threads
