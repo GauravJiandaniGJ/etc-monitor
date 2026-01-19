@@ -561,8 +561,34 @@ def create_app(settings: Optional[Settings] = None) -> Flask:
             }
         }
 
-        function getUserInitial(userId) {
-            return userId ? userId.charAt(0).toUpperCase() : '?';
+        function getUserInitial(userId, userName) {
+            // Use first letter of name if available, otherwise use first letter of ID
+            if (userName && userName !== '-' && userName !== userId) {
+                return userName.charAt(0).toUpperCase();
+            }
+            if (userId && userId !== '-') {
+                return userId.charAt(0).toUpperCase();
+            }
+            return '?';
+        }
+
+        function formatUserName(reminder) {
+            if (reminder.user_name && reminder.user_name !== reminder.user_id && reminder.user_name !== '-') {
+                return reminder.user_name;
+            }
+            if (reminder.user_id && reminder.user_id !== '-') {
+                return reminder.user_id;
+            }
+            return '-';
+        }
+
+        function formatChannelName(reminder) {
+            let channelName = reminder.channel_name || reminder.channel_id || '-';
+            // Remove # if already present, we'll add it in display
+            if (channelName.startsWith('#')) {
+                channelName = channelName.substring(1);
+            }
+            return channelName;
         }
 
         function createReminderRow(reminder) {
@@ -572,14 +598,16 @@ def create_app(settings: Optional[Settings] = None) -> Flask:
 
             const messageText = reminder.deadline_text || '-';
             const escapedMessage = messageText.replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;');
+            const userName = formatUserName(reminder);
+            const channelName = formatChannelName(reminder);
             row.innerHTML = `
                 <td>
                     <div class="user-badge">
-                        <div class="user-avatar">${getUserInitial(reminder.user_id)}</div>
-                        <span>${(reminder.user_id || '-').substring(0, 20)}</span>
+                        <div class="user-avatar">${getUserInitial(reminder.user_id, reminder.user_name)}</div>
+                        <span>${userName}</span>
                     </div>
                 </td>
-                <td><code class="time-stamp">${(reminder.channel_id || '-').substring(0, 15)}</code></td>
+                <td><span>#${channelName}</span></td>
                 <td><div class="message-preview" title="${escapedMessage}">${escapedMessage.substring(0, 40)}${messageText.length > 40 ? '...' : ''}</div></td>
                 <td><span class="time-stamp">${formatDate(reminder.deadline_datetime)}</span></td>
                 <td><span class="time-stamp">${formatDate(reminder.reminder_datetime)}</span></td>
@@ -664,14 +692,16 @@ def create_app(settings: Optional[Settings] = None) -> Flask:
                     const row = document.createElement('tr');
                     const messageText = reminder.deadline_text || '-';
                     const escapedMessage = messageText.replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;');
+                    const userName = formatUserName(reminder);
+                    const channelName = formatChannelName(reminder);
                     row.innerHTML = `
                         <td>
                             <div class="user-badge">
-                                <div class="user-avatar">${getUserInitial(reminder.user_id)}</div>
-                                <span>${(reminder.user_id || '-').substring(0, 20)}</span>
+                                <div class="user-avatar">${getUserInitial(reminder.user_id, reminder.user_name)}</div>
+                                <span>${userName}</span>
                             </div>
                         </td>
-                        <td><code class="time-stamp">${(reminder.channel_id || '-').substring(0, 15)}</code></td>
+                        <td><span>#${channelName}</span></td>
                         <td><div class="message-preview" title="${escapedMessage}">${escapedMessage.substring(0, 40)}${messageText.length > 40 ? '...' : ''}</div></td>
                         <td><span class="time-stamp">${formatDate(reminder.deadline_datetime)}</span></td>
                         <td><span class="time-stamp">${formatDate(reminder.reminder_datetime)}</span></td>

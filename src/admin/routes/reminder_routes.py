@@ -3,6 +3,7 @@ from flask import Blueprint, jsonify, request
 from typing import Optional
 from functools import wraps
 import time
+from datetime import datetime
 from src.database.db_manager import DBManager
 from src.database.repositories.reminder_repository import ReminderRepository
 from src.database.repositories.audit_repository import AuditRepository
@@ -22,11 +23,16 @@ reminder_bp = Blueprint('reminders', __name__)
 # Initialize services (will be set up in app.py)
 _reminder_service: Optional[ReminderService] = None
 _notification_service: Optional[NotificationService] = None
+_slack_client: Optional[WebClient] = None
+
+# Cache for user and channel names to avoid repeated API calls
+_user_cache: dict = {}
+_channel_cache: dict = {}
 
 
 def init_reminder_routes(settings: Settings):
     """Initialize reminder routes with services."""
-    global _reminder_service, _notification_service
+    global _reminder_service, _notification_service, _slack_client
 
     db_manager = DBManager(settings)
     reminder_repo = ReminderRepository(db_manager)
@@ -37,10 +43,80 @@ def init_reminder_routes(settings: Settings):
         audit_repo=audit_repo
     )
 
-    slack_client = WebClient(token=settings.slack_bot_token)
-    _notification_service = NotificationService(slack_client)
+    _slack_client = WebClient(token=settings.slack_bot_token)
+    _notification_service = NotificationService(_slack_client)
 
     logger.info('Reminder routes initialized')
+
+
+def _get_user_name(user_id: str) -> str:
+    """Get user name from Slack API with caching."""
+    if not user_id:
+        return '-'
+
+    if not _slack_client:
+        return user_id
+
+    # Check cache first
+    if user_id in _user_cache:
+        return _user_cache[user_id]
+
+    try:
+        response = _slack_client.users_info(user=user_id)
+        if response and response.get('ok') and response.get('user'):
+            user = response['user']
+            # Prefer real_name, fallback to display_name, then name, then user_id
+            user_name = (
+                user.get('real_name') or
+                user.get('profile', {}).get('display_name') or
+                user.get('name') or
+                user_id
+            )
+            _user_cache[user_id] = user_name
+            return user_name
+        else:
+            # API returned error, cache the ID to avoid repeated calls
+            _user_cache[user_id] = user_id
+            return user_id
+    except Exception as e:
+        logger.warning(f'Error fetching user info for {user_id}: {e}')
+        # Cache the ID to avoid repeated failed calls
+        _user_cache[user_id] = user_id
+        return user_id
+
+
+def _get_channel_name(channel_id: str) -> str:
+    """Get channel name from Slack API with caching."""
+    if not channel_id:
+        return '-'
+
+    if not _slack_client:
+        return channel_id
+
+    # Check cache first
+    if channel_id in _channel_cache:
+        return _channel_cache[channel_id]
+
+    try:
+        response = _slack_client.conversations_info(channel=channel_id)
+        if response and response.get('ok') and response.get('channel'):
+            channel = response['channel']
+            # Get channel name, handle both public and private channels
+            channel_name = (
+                channel.get('name') or
+                channel.get('id', channel_id)
+            )
+            _channel_cache[channel_id] = channel_name
+            return channel_name
+        else:
+            # API returned error, cache the ID to avoid repeated calls
+            _channel_cache[channel_id] = channel_id
+            return channel_id
+    except Exception as e:
+        logger.warning(f'Error fetching channel info for {channel_id}: {e}')
+        # Cache the ID to avoid repeated failed calls
+        _channel_cache[channel_id] = channel_id
+        return channel_id
 
 
 @reminder_bp.route('/api/reminders', methods=['GET'])
@@ -127,25 +203,52 @@ def list_reminders():
             rows = []
 
         # 4. Format reminders directly (avoid slow _row_to_reminder conversion)
+        # Helper to safely format datetime
+        def format_dt(dt_val):
+            if not dt_val:
+                return None
+            if isinstance(dt_val, str):
+                return dt_val  # Already a string
+            try:
+                return dt_val.isoformat()
+            except:
+                return str(dt_val)
+
+        # Collect unique user and channel IDs first for batch processing
+        unique_user_ids = set()
+        unique_channel_ids = set()
+        for row in rows:
+            user_id = row.get('user_id')
+            channel_id = row.get('channel_id')
+            if user_id:
+                unique_user_ids.add(user_id)
+            if channel_id:
+                unique_channel_ids.add(channel_id)
+
+        # Pre-fetch names for all unique IDs (this populates cache)
+        # This is more efficient than fetching one by one
+        for user_id in unique_user_ids:
+            if user_id not in _user_cache:
+                _get_user_name(user_id)
+
+        for channel_id in unique_channel_ids:
+            if channel_id not in _channel_cache:
+                _get_channel_name(channel_id)
+
+        # Now format reminders (cache is populated, so this is fast)
         formatted_reminders = []
         for row in rows:
             try:
-                # Helper to safely format datetime
-                def format_dt(dt_val):
-                    if not dt_val:
-                        return None
-                    if isinstance(dt_val, str):
-                        return dt_val  # Already a string
-                    try:
-                        return dt_val.isoformat()
-                    except:
-                        return str(dt_val)
+                user_id = row.get('user_id') or ''
+                channel_id = row.get('channel_id') or ''
 
                 formatted_reminders.append({
                     'id': row.get('id'),
-                    'channel_id': row.get('channel_id'),
+                    'channel_id': channel_id,
+                    'channel_name': _get_channel_name(channel_id) if channel_id else None,
                     'thread_ts': row.get('thread_ts'),
-                    'user_id': row.get('user_id'),
+                    'user_id': user_id,
+                    'user_name': _get_user_name(user_id) if user_id else None,
                     'message_ts': row.get('message_ts'),
                     'deadline_text': row.get('deadline_text'),
                     'deadline_datetime': format_dt(row.get('deadline_datetime')),
@@ -217,16 +320,14 @@ def update_reminder(reminder_id: int):
                 return jsonify({'error': f'Invalid status: {data["status"]}'}), 400
 
         if 'deadline_datetime' in data:
-            from datetime import datetime as dt
             try:
-                updates['deadline_datetime'] = dt.fromisoformat(data['deadline_datetime'])
+                updates['deadline_datetime'] = datetime.fromisoformat(data['deadline_datetime'])
             except ValueError:
                 return jsonify({'error': 'Invalid deadline_datetime format'}), 400
 
         if 'reminder_datetime' in data:
-            from datetime import datetime as dt
             try:
-                updates['reminder_datetime'] = dt.fromisoformat(data['reminder_datetime'])
+                updates['reminder_datetime'] = datetime.fromisoformat(data['reminder_datetime'])
             except ValueError:
                 return jsonify({'error': 'Invalid reminder_datetime format'}), 400
 
@@ -339,8 +440,10 @@ def _format_reminder(reminder) -> dict:
     return {
         'id': reminder.id,
         'channel_id': reminder.channel_id,
+        'channel_name': _get_channel_name(reminder.channel_id) if reminder.channel_id else None,
         'thread_ts': reminder.thread_ts,
         'user_id': reminder.user_id,
+        'user_name': _get_user_name(reminder.user_id) if reminder.user_id else None,
         'message_ts': reminder.message_ts,
         'deadline_text': reminder.deadline_text,
         'deadline_datetime': reminder.deadline_datetime.isoformat() if reminder.deadline_datetime else None,

@@ -148,6 +148,12 @@ class DateTimeParser:
         """
         logger.info(f'Trying to parse relative time from: "{text}"')
 
+        # CRITICAL: If text contains AM/PM, it's NOT relative time - reject immediately
+        text_upper = text.upper()
+        if 'AM' in text_upper or 'PM' in text_upper:
+            logger.warning(f'Text "{text}" contains AM/PM - rejecting relative time parse (should be specific time)')
+            return None
+
         # Comprehensive relative time patterns
         relative_patterns = [
             # Pattern: "X min", "X mins", "X minute", "X minutes", "Xm"
@@ -314,18 +320,33 @@ class DateTimeParser:
         Returns:
             Datetime with parsed time or None
         """
-        # Try patterns for time with AM/PM
+        # Try patterns for time with AM/PM (more comprehensive patterns)
         time_patterns = [
-            r'(\d{1,2}):(\d{2})\s*(am|pm)',
-            r'(\d{1,2})\s*(am|pm)',
+            # Pattern: "2:30 PM", "2:30PM", "2:30 pm"
+            (r'(\d{1,2}):(\d{2})\s*(am|pm)', True),  # Has minutes
+            # Pattern: "2 PM", "2PM", "2 pm"
+            (r'(\d{1,2})\s*(am|pm)', False),  # No minutes
+            # Pattern: "2:30PM" (no space)
+            (r'(\d{1,2}):(\d{2})(am|pm)', True),
+            # Pattern: "2PM" (no space, no minutes)
+            (r'(\d{1,2})(am|pm)', False),
         ]
 
-        for pattern in time_patterns:
-            match = re.search(pattern, text)
+        for pattern, has_minutes in time_patterns:
+            match = re.search(pattern, text, re.IGNORECASE)
             if match:
-                hour = int(match.group(1))
-                minute = int(match.group(2)) if len(match.groups()) >= 2 and match.group(2).isdigit() else 0
-                period = match.group(len(match.groups()))
+                groups = match.groups()
+                hour = int(groups[0])
+
+                if has_minutes:
+                    minute = int(groups[1]) if len(groups) > 1 and groups[1].isdigit() else 0
+                    period = groups[2].lower() if len(groups) > 2 else None
+                else:
+                    minute = 0
+                    period = groups[1].lower() if len(groups) > 1 else None
+
+                if not period:
+                    continue
 
                 # Convert to 24-hour format
                 if period == 'pm' and hour != 12:
@@ -333,14 +354,19 @@ class DateTimeParser:
                 elif period == 'am' and hour == 12:
                     hour = 0
 
+                # Validate hour and minute
+                if not (0 <= hour <= 23 and 0 <= minute <= 59):
+                    continue
+
                 target_date = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
                 if target_date <= now:
                     target_date += timedelta(days=1)
 
+                logger.info(f'Parsed time of day: {text} -> {target_date} (hour={hour}, minute={minute})')
                 return target_date
 
-        # Try 24-hour format
-        match = re.search(r'^(\d{1,2}):(\d{2})$', text)
+        # Try 24-hour format: "14:30", "17:00"
+        match = re.search(r'(\d{1,2}):(\d{2})', text)
         if match:
             hour = int(match.group(1))
             minute = int(match.group(2))
@@ -349,19 +375,46 @@ class DateTimeParser:
                 target_date = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
                 if target_date <= now:
                     target_date += timedelta(days=1)
+                logger.info(f'Parsed 24-hour time: {text} -> {target_date}')
                 return target_date
 
-        # Try standalone hour (assume PM if < 12)
+        # Try standalone hour - CONTEXT-AWARE PARSING
+        # This is less reliable, so we check it last
         match = re.search(r'^(\d{1,2})$', text)
         if match:
             hour = int(match.group(1))
             if 1 <= hour <= 12:
-                # Assume PM for business hours
-                if hour != 12:
-                    hour += 12
+                current_hour_24 = now.hour
+
+                # CONTEXT-AWARE LOGIC:
+                # If current time is past 12 PM (13:00 or later), "12" likely means 12 AM (midnight)
+                # If current time is before 12 PM, "12" likely means 12 PM (noon)
+                if hour == 12:
+                    # Special case for "12"
+                    if current_hour_24 >= 13:  # Past 1 PM, so 12 means 12 AM (midnight)
+                        hour = 0  # 12 AM = 00:00
+                        logger.info(f'Context-aware: Current time is {current_hour_24:02d}:{now.minute:02d} (past 12 PM), interpreting "12" as 12 AM (midnight)')
+                    else:  # Before 1 PM, so 12 means 12 PM (noon)
+                        hour = 12  # 12 PM = 12:00
+                        logger.info(f'Context-aware: Current time is {current_hour_24:02d}:{now.minute:02d} (before 1 PM), interpreting "12" as 12 PM (noon)')
+                else:
+                    # For other hours (1-11), assume PM if current time is in afternoon/evening
+                    # Otherwise assume AM if it's early morning
+                    if current_hour_24 >= 13:  # Past 1 PM
+                        # If it's afternoon/evening, standalone hour likely means PM
+                        if hour != 12:
+                            hour += 12
+                        logger.info(f'Context-aware: Current time is {current_hour_24:02d}:{now.minute:02d} (afternoon), interpreting "{hour-12 if hour > 12 else hour}" as {hour}:00')
+                    else:  # Before 1 PM
+                        # If it's morning, could be AM or PM - default to PM for business hours
+                        if hour != 12:
+                            hour += 12
+                        logger.info(f'Context-aware: Current time is {current_hour_24:02d}:{now.minute:02d} (morning), interpreting "{hour-12 if hour > 12 else hour}" as {hour}:00')
+
                 target_date = now.replace(hour=hour, minute=0, second=0, microsecond=0)
                 if target_date <= now:
                     target_date += timedelta(days=1)
+                logger.info(f'Parsed standalone hour: {text} -> {target_date} (context-aware: current={current_hour_24:02d}:{now.minute:02d})')
                 return target_date
 
         # Named times
@@ -379,6 +432,7 @@ class DateTimeParser:
                 target_date = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
                 if target_date <= now:
                     target_date += timedelta(days=1)
+                logger.info(f'Parsed named time: {text} -> {target_date}')
                 return target_date
 
         return None
