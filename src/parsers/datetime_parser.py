@@ -53,6 +53,7 @@ class DateTimeParser:
         logger.info(f'Parsing datetime from: "{text}" (normalized: "{text_lower}")')
 
         # Try parsing methods in order of priority
+        # IMPORTANT: Check day+time BEFORE standalone time to avoid false matches
         result = self._parse_relative_time(text_lower, now)
         if result:
             logger.info(f'Matched relative time pattern for: "{text_lower}"')
@@ -65,15 +66,16 @@ class DateTimeParser:
             logger.success(f'Parsed "{text}" -> {result}')
             return result
 
-        result = self._parse_time_of_day(text_lower, now)
-        if result:
-            logger.info(f'Matched time of day for: "{text_lower}"')
-            logger.success(f'Parsed "{text}" -> {result}')
-            return result
-
+        # Check day+time BEFORE standalone time (e.g., "tomorrow 1PM" before "1PM")
         result = self._parse_day_with_time(text_lower, now)
         if result:
             logger.info(f'Matched day with time for: "{text_lower}"')
+            logger.success(f'Parsed "{text}" -> {result}')
+            return result
+
+        result = self._parse_time_of_day(text_lower, now)
+        if result:
+            logger.info(f'Matched time of day for: "{text_lower}"')
             logger.success(f'Parsed "{text}" -> {result}')
             return result
 
@@ -438,25 +440,30 @@ class DateTimeParser:
         }
 
         for day_word, offset in day_offsets.items():
+            # Match patterns like "tomorrow 1PM", "tomorrow at 1PM", "tomorrow 1:30 PM"
+            # AM/PM is REQUIRED for this pattern
             match = re.search(
-                rf'{day_word}\s+(?:at\s+)?(\d{{1,2}})(?::(\d{{2}}))?\s*(am|pm)?',
-                text
+                rf'{day_word}\s+(?:at\s+)?(\d{{1,2}})(?::(\d{{2}}))?\s*(am|pm)',
+                text,
+                re.IGNORECASE
             )
             if match:
                 hour = int(match.group(1))
                 minute = int(match.group(2)) if match.group(2) else 0
-                period = match.group(3)
+                period = match.group(3).lower()
 
-                if period:
-                    if period == 'pm' and hour != 12:
-                        hour += 12
-                    elif period == 'am' and hour == 12:
-                        hour = 0
+                # Convert to 24-hour format
+                if period == 'pm' and hour != 12:
+                    hour += 12
+                elif period == 'am' and hour == 12:
+                    hour = 0
 
+                # Calculate target date (tomorrow = +1 day, today = +0 days)
                 target_date = now + timedelta(days=offset)
                 target_date = target_date.replace(hour=hour, minute=minute, second=0, microsecond=0)
 
-                if target_date <= now and offset == 0:
+                # If target is in the past (shouldn't happen for tomorrow, but safety check)
+                if target_date <= now:
                     target_date += timedelta(days=1)
 
                 return target_date

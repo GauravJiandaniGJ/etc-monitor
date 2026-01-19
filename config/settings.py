@@ -63,7 +63,7 @@ class Settings:
 
         if self.database_type == 'sqlite':
             # SQLite configuration
-            self.database_path = os.environ.get('DATABASE_PATH', 'reminders.db')
+                self.database_path = os.environ.get('DATABASE_PATH', 'reminders.db')
         else:
             # PostgreSQL/MySQL configuration
             self.database_host = os.environ.get('DATABASE_HOST')

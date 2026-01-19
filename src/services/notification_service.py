@@ -49,23 +49,21 @@ class NotificationService:
 
         for attempt in range(max_retries):
             try:
-                # Validate thread_ts before sending
+                # Validate thread_ts before sending - MUST be in thread
                 # Use deadline_text or original_message, fallback to deadline_text
                 reminder_text = reminder.deadline_text or reminder.original_message or "ETC"
 
-                if reminder.thread_ts and len(reminder.thread_ts) > 10 and '.' in reminder.thread_ts:
-                    response = self.client.chat_postMessage(
-                        channel=reminder.channel_id,
-                        thread_ts=reminder.thread_ts,
-                        text=f"<@{reminder.user_id}> Status!\n*ETC:* {reminder_text}"
-                    )
-                else:
-                    # Send as regular message if thread_ts is invalid
-                    logger.warning(f'Invalid thread_ts for reminder {reminder.id}, sending as regular message')
-                    response = self.client.chat_postMessage(
-                        channel=reminder.channel_id,
-                        text=f"<@{reminder.user_id}> Status!\n*ETC:* {reminder_text}"
-                    )
+                # CRITICAL: All reminders MUST be in threads - fail if thread_ts is invalid
+                if not reminder.thread_ts or len(reminder.thread_ts) <= 10 or '.' not in reminder.thread_ts:
+                    logger.error(f'Invalid thread_ts for reminder {reminder.id} - CANNOT send outside thread')
+                    return False
+
+                # Send message IN THREAD only
+                response = self.client.chat_postMessage(
+                    channel=reminder.channel_id,
+                    thread_ts=reminder.thread_ts,
+                    text=f"<@{reminder.user_id}> Status!\n*ETC:* {reminder_text}"
+                )
 
                 if response["ok"]:
                     logger.success(f'Reminder {reminder.id} sent successfully to {reminder.user_id}')
@@ -126,21 +124,34 @@ class NotificationService:
             now = now_ist()
             time_until_reminder = reminder.reminder_datetime - now
 
-            # Format reminder time message - show actual time until reminder
-            # Reminder is always at the exact deadline time
-            if time_until_reminder <= timedelta(seconds=30):
+            # Format reminder time message - show ACCURATE time until reminder
+            # Use round() instead of int() for accurate time display
+            total_seconds = time_until_reminder.total_seconds()
+
+            # Debug logging for time calculation
+            logger.debug(
+                f'Time calculation: now={now}, reminder_time={reminder.reminder_datetime}, '
+                f'diff={total_seconds}s ({total_seconds/60:.2f} minutes)'
+            )
+
+            if total_seconds <= 30:
                 reminder_msg = "You'll be reminded in less than a minute."
-            elif time_until_reminder < timedelta(minutes=1):
-                seconds = int(time_until_reminder.total_seconds())
+            elif total_seconds < 60:
+                seconds = round(total_seconds)
                 sec_text = "second" if seconds == 1 else "seconds"
                 reminder_msg = f"You'll be reminded in {seconds} {sec_text}."
-            elif time_until_reminder < timedelta(hours=1):
-                minutes = int(time_until_reminder.total_seconds() / 60)
+            elif total_seconds < 3600:  # Less than 1 hour
+                # Round to nearest minute for accurate display
+                minutes = round(total_seconds / 60)
+                # Ensure at least 1 minute if there's any time remaining
+                if minutes < 1 and total_seconds > 0:
+                    minutes = 1
                 min_text = "minute" if minutes == 1 else "minutes"
                 reminder_msg = f"You'll be reminded in {minutes} {min_text}."
-            elif time_until_reminder < timedelta(hours=24):
-                hours = int(time_until_reminder.total_seconds() / 3600)
-                minutes = int((time_until_reminder.total_seconds() % 3600) / 60)
+            elif total_seconds < 86400:  # Less than 1 day
+                hours = round(total_seconds / 3600)
+                remaining_seconds = total_seconds % 3600
+                minutes = round(remaining_seconds / 60)
                 hour_text = "hour" if hours == 1 else "hours"
                 if minutes > 0:
                     min_text = "minute" if minutes == 1 else "minutes"
@@ -148,7 +159,7 @@ class NotificationService:
                 else:
                     reminder_msg = f"You'll be reminded in {hours} {hour_text}."
             else:
-                days = int(time_until_reminder.total_seconds() / 86400)
+                days = round(total_seconds / 86400)
                 day_text = "day" if days == 1 else "days"
                 reminder_msg = f"You'll be reminded in {days} {day_text}."
 
@@ -160,6 +171,11 @@ class NotificationService:
 
             if is_update and reminder.reschedule_count > 0:
                 message += f"\n(Rescheduled {reminder.reschedule_count} time(s))"
+
+            # CRITICAL: All confirmations MUST be in threads
+            if not reminder.thread_ts or len(reminder.thread_ts) <= 10 or '.' not in reminder.thread_ts:
+                logger.error(f'Invalid thread_ts for reminder {reminder.id} confirmation - CANNOT send outside thread')
+                return False
 
             response = self.client.chat_postMessage(
                 channel=reminder.channel_id,
@@ -201,6 +217,11 @@ class NotificationService:
                 f"Reminder cancelled.\n"
                 f"Original deadline: {deadline_str}"
             )
+
+            # CRITICAL: All cancellations MUST be in threads
+            if not reminder.thread_ts or len(reminder.thread_ts) <= 10 or '.' not in reminder.thread_ts:
+                logger.error(f'Invalid thread_ts for reminder {reminder.id} cancellation - CANNOT send outside thread')
+                return False
 
             response = self.client.chat_postMessage(
                 channel=reminder.channel_id,

@@ -94,14 +94,7 @@ class MessageHandler:
 
             logger.info('ETC indicator detected - processing')
 
-            # Step 3: Send immediate acknowledgment
-            try:
-                say(f"Processing ETC: {text}")
-                logger.info('Sent immediate acknowledgment')
-            except Exception as e:
-                logger.warning(f'Failed to send acknowledgment: {e}')
-
-            # Step 4: Process in background for fast response
+            # Step 3: Process in background for fast response (no acknowledgment message)
             # Type safety: We've already validated these are strings above
             assert isinstance(channel_id, str)
             assert isinstance(user_id, str)

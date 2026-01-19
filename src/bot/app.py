@@ -132,10 +132,22 @@ class SlackBot:
         """Register all event and command handlers."""
         logger.info('Registering event handlers')
 
-        # Message event handler
+        # Message event handler - ONLY process thread replies (strict filtering)
         @self.app.event("message")
         def handle_message_event(body, event, say, logger):
-            """Handle message events."""
+            """Handle message events - ONLY thread replies."""
+            # CRITICAL: Only process messages that are thread replies
+            thread_ts = event.get("thread_ts")
+            if not thread_ts:
+                # Skip non-thread messages silently (no logging to reduce noise)
+                return
+
+            # Additional validation: ensure thread_ts is valid format
+            if not isinstance(thread_ts, str) or len(thread_ts) < 10 or '.' not in thread_ts:
+                logger.warning(f'Invalid thread_ts format: {thread_ts} - skipping')
+                return
+
+            # Only process thread replies
             self.message_handler.handle_message(event, say)
 
         # Slash command handlers
