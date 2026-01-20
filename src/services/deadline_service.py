@@ -81,29 +81,42 @@ class DeadlineService:
 
             logger.info('ETC indicator detected - proceeding to parsing')
 
-            # CRITICAL: ALWAYS use AI ONLY - no regex fallback (user requirement)
-            if not self.ai_parser or not self.ai_parser.is_available():
-                logger.error('[AI] AI parser not available - CANNOT parse deadline (AI required)')
-                return None
+            # Try AI first (preferred method)
+            ai_result = None
+            if self.ai_parser and self.ai_parser.is_available():
+                logger.info('=' * 60)
+                logger.info('[AI] USING AI FIRST - Attempting AI parsing...')
+                logger.info('=' * 60)
 
+                try:
+                    ai_result = self._try_ai_parsing(message)
+                    if ai_result:
+                        logger.success(
+                            f'[AI] Success: {ai_result.deadline_datetime} '
+                            f'(confidence: {ai_result.confidence:.2f})'
+                        )
+                        return ai_result
+                    logger.warning('[AI] AI parsing returned None - falling back to regex')
+                except Exception as e:
+                    logger.error(f'[AI] AI parsing error: {e} - falling back to regex', exc=e)
+            else:
+                logger.warning('[AI] AI parser not available - using regex fallback')
+
+            # Fallback to regex if AI failed
             logger.info('=' * 60)
-            logger.info('[AI] USING AI ONLY - Attempting AI parsing (no regex fallback)...')
+            logger.info('[REGEX] Using regex fallback for parsing...')
             logger.info('=' * 60)
 
-            try:
-                ai_result = self._try_ai_parsing(message)
-                if ai_result:
-                    logger.success(
-                        f'[AI] Success: {ai_result.deadline_datetime} '
-                        f'(confidence: {ai_result.confidence:.2f})'
-                    )
-                    return ai_result
+            regex_result = self._try_regex_parsing(message, context)
+            if regex_result:
+                logger.success(
+                    f'[REGEX] Success: {regex_result.deadline_datetime} '
+                    f'(confidence: {regex_result.confidence:.2f})'
+                )
+                return regex_result
 
-                logger.error('[AI] AI parsing returned None - FAILED (AI parsing required, no fallback)')
-                return None
-            except Exception as e:
-                logger.error(f'[AI] AI parsing error: {e} - FAILED (AI parsing required, no fallback)', exc=e)
-                return None
+            logger.error('[REGEX] Regex parsing also failed - no deadline detected')
+            return None
 
         except Exception as e:
             logger.error(f'Unexpected error in deadline detection: {e}', exc=e)

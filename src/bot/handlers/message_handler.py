@@ -53,26 +53,40 @@ class MessageHandler:
 
         Process flow:
         1. Validate message (thread reply only)
-        2. Send immediate acknowledgment
+        2. Handle both new messages and edited messages
         3. Process deadline detection in background
-        4. Create reminder and schedule
+        4. Create or update reminder and schedule
 
         Args:
             event: Slack event dictionary
             say: Slack Bolt say function for responding
         """
         try:
+            # Check if this is an edited message
+            subtype = event.get("subtype")
+            is_edit = subtype == "message_changed"
+
+            if is_edit:
+                # For edited messages, data is in event["message"]
+                message_data = event.get("message", {})
+                text = message_data.get("text", "").strip()
+                channel_id = event.get("channel")
+                user_id = message_data.get("user")
+                message_ts = message_data.get("ts")  # Original message timestamp
+                thread_ts = message_data.get("thread_ts")
+                logger.info(f'Processing EDITED message: "{text[:50]}..."')
+            else:
+                # For new messages, data is directly in event
+                text = event.get("text", "").strip()
+                channel_id = event.get("channel")
+                user_id = event.get("user")
+                message_ts = event.get("ts")
+                thread_ts = event.get("thread_ts")
+
             # Step 1: Filter - only process thread replies
-            thread_ts = event.get("thread_ts")
             if not thread_ts:
                 logger.debug('Not a thread reply - skipping')
                 return
-
-            # Extract message data
-            text = event.get("text", "").strip()
-            channel_id = event.get("channel")
-            user_id = event.get("user")
-            message_ts = event.get("ts")
 
             # Validate required fields
             if not all([text, channel_id, user_id, message_ts]):
@@ -84,7 +98,13 @@ class MessageHandler:
                 logger.warning('Invalid field types in event')
                 return
 
-            logger.info(f'Processing message from user {user_id}: "{text}"')
+            # Log message details for debugging
+            edit_marker = "[EDITED] " if is_edit else ""
+            logger.info(f'{edit_marker}Processing message from user {user_id}:')
+            logger.info(f'  - Text: "{text}"')
+            logger.info(f'  - Channel: {channel_id}')
+            logger.info(f'  - Thread: {thread_ts}')
+            logger.info(f'  - Message TS: {message_ts}')
 
             # Step 2: Quick ETC indicator check
             has_etc = self.deadline_service.has_etc_indicator(text)
@@ -151,11 +171,17 @@ class MessageHandler:
                 f'(method: {parsed_deadline.parsed_by}, confidence: {parsed_deadline.confidence:.2f})'
             )
 
-            # Check for existing reminder
-            existing = self.reminder_service.reminder_repo.find_existing_active(
-                channel_id, thread_ts, user_id
+            # Check for existing reminder FOR THIS SPECIFIC MESSAGE
+            existing = self.reminder_service.reminder_repo.find_by_message(
+                channel_id, thread_ts, user_id, message_ts
             )
             is_update = existing is not None
+
+            # If updating, cancel the old scheduled job FIRST
+            if is_update and existing:
+                old_job_id = existing.job_id
+                logger.info(f'Cancelling old job {old_job_id} for reminder {existing.id}')
+                self.scheduler.cancel(old_job_id)
 
             # Create or update reminder
             reminder = self.reminder_service.create_or_update(context, parsed_deadline)
@@ -173,7 +199,7 @@ class MessageHandler:
                 f'(deadline: {reminder.deadline_datetime})'
             )
 
-            # Schedule reminder job
+            # Schedule reminder job (new or updated)
             if not self.scheduler.schedule(reminder, self._send_reminder_callback):
                 logger.error(f'Failed to schedule reminder {reminder.id}')
                 self.reminder_service.mark_failed(reminder.id, "Failed to schedule job")

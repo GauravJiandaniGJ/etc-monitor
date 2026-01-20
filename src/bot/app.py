@@ -134,19 +134,35 @@ class SlackBot:
 
         # Message event handler - ONLY process thread replies (strict filtering)
         @self.app.event("message")
-        def handle_message_event(body, event, say, logger):
-            """Handle message events - ONLY thread replies."""
+        def handle_message_event(body, event, say):
+            """Handle message events - ONLY thread replies (includes edited messages)."""
+            # Handle both new messages and edited messages
+            subtype = event.get("subtype")
+            is_edit = subtype == "message_changed"
+
+            logger.info(f'[APP] Received message event - subtype: {subtype}, is_edit: {is_edit}')
+
+            # For edited messages, check thread_ts in event["message"]
+            # For new messages, check thread_ts directly in event
+            if is_edit:
+                message_data = event.get("message", {})
+                thread_ts = message_data.get("thread_ts")
+                logger.info(f'[APP] Edited message - thread_ts: {thread_ts}')
+            else:
+                thread_ts = event.get("thread_ts")
+                logger.info(f'[APP] New message - thread_ts: {thread_ts}')
+
             # CRITICAL: Only process messages that are thread replies
-            thread_ts = event.get("thread_ts")
             if not thread_ts:
-                # Skip non-thread messages silently (no logging to reduce noise)
+                logger.info('[APP] No thread_ts found - skipping (not a thread reply)')
                 return
 
             # Additional validation: ensure thread_ts is valid format
             if not isinstance(thread_ts, str) or len(thread_ts) < 10 or '.' not in thread_ts:
-                logger.warning(f'Invalid thread_ts format: {thread_ts} - skipping')
+                logger.warning(f'[APP] Invalid thread_ts format: {thread_ts} - skipping')
                 return
 
+            logger.info('[APP] Passing to message handler')
             # Only process thread replies
             self.message_handler.handle_message(event, say)
 

@@ -379,6 +379,12 @@ class AIParser:
                     # E.g., "ETC 5 minutes" should extract something with "5" in it
                     relative_words_in_original = any(word in text.lower() for word in ['min', 'minute', 'hour', 'hr', 'day', 'week'])
                     if relative_words_in_original and original_numbers:
+                        # CRITICAL: If original has relative time (minutes/hours) but extracted has PM/AM, REJECT
+                        # Example: "3 minutes" should NOT become "3:30 PM"
+                        if extracted_has_pm_am:
+                            logger.error(f'[AI] CRITICAL ERROR: Original "{text}" has relative time (minutes/hours) but extracted "{deadline_text}" has PM/AM! Rejecting extraction.')
+                            return None
+
                         # Find the number closest to the relative time word
                         main_number = original_numbers[0]  # Usually the first number
                         for num in original_numbers:
