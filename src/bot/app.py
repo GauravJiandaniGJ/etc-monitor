@@ -135,12 +135,35 @@ class SlackBot:
         # Message event handler - ONLY process thread replies (strict filtering)
         @self.app.event("message")
         def handle_message_event(body, event, say):
-            """Handle message events - ONLY thread replies (includes edited messages)."""
-            # Handle both new messages and edited messages
+            """Handle message events - ONLY thread replies (includes edited and deleted messages)."""
+            # Handle new messages, edited messages, and deleted messages
             subtype = event.get("subtype")
             is_edit = subtype == "message_changed"
+            is_delete = subtype == "message_deleted"
 
-            logger.info(f'[APP] Received message event - subtype: {subtype}, is_edit: {is_edit}')
+            logger.info(f'[APP] Received message event - subtype: {subtype}, is_edit: {is_edit}, is_delete: {is_delete}')
+
+            # Handle deleted messages
+            if is_delete:
+                previous_message = event.get("previous_message", {})
+                thread_ts = previous_message.get("thread_ts")
+                deleted_ts = event.get("deleted_ts")  # The timestamp of the deleted message
+                channel_id = event.get("channel")
+
+                logger.info(f'[APP] Deleted message - thread_ts: {thread_ts}, deleted_ts: {deleted_ts}')
+
+                # Only process if it was a thread reply
+                if thread_ts and deleted_ts and channel_id:
+                    logger.info('[APP] Passing deleted message to message handler')
+                    self.message_handler.handle_message_deleted(
+                        channel_id=channel_id,
+                        thread_ts=thread_ts,
+                        deleted_message_ts=deleted_ts,
+                        previous_message=previous_message
+                    )
+                else:
+                    logger.info('[APP] Deleted message not in thread - skipping')
+                return
 
             # For edited messages, check thread_ts in event["message"]
             # For new messages, check thread_ts directly in event

@@ -248,6 +248,67 @@ class MessageHandler:
                 except:
                     pass
 
+    def handle_message_deleted(
+        self,
+        channel_id: str,
+        thread_ts: str,
+        deleted_message_ts: str,
+        previous_message: dict
+    ) -> None:
+        """Handle a deleted message event.
+
+        When a message containing an ETC is deleted, this method:
+        1. Finds the reminder associated with that message
+        2. Cancels the scheduled job
+        3. Marks the reminder as cancelled
+        4. Sends a cancellation notification to the thread
+
+        Args:
+            channel_id: Slack channel ID
+            thread_ts: Thread timestamp
+            deleted_message_ts: Timestamp of the deleted message
+            previous_message: The message content before deletion
+        """
+        try:
+            logger.info(f'Processing deleted message: {deleted_message_ts} in thread {thread_ts}')
+
+            user_id = previous_message.get("user")
+            if not user_id:
+                logger.warning('Deleted message has no user_id - skipping')
+                return
+
+            # Find reminder associated with this specific message
+            reminder = self.reminder_service.reminder_repo.find_by_message(
+                channel_id=channel_id,
+                thread_ts=thread_ts,
+                user_id=user_id,
+                message_ts=deleted_message_ts
+            )
+
+            if not reminder:
+                logger.debug(f'No active reminder found for deleted message {deleted_message_ts}')
+                return
+
+            logger.info(f'Found reminder {reminder.id} for deleted message - cancelling')
+
+            # Cancel the scheduled job first
+            job_id = reminder.job_id
+            self.scheduler.cancel(job_id)
+            logger.info(f'Cancelled scheduled job {job_id}')
+
+            # Mark reminder as cancelled in database
+            success = self.reminder_service.cancel(reminder.id, cancelled_by='message_deleted')
+
+            if success:
+                # Send cancellation notification to thread
+                self.notification_service.send_cancellation(reminder)
+                logger.success(f'Reminder {reminder.id} cancelled due to message deletion')
+            else:
+                logger.error(f'Failed to cancel reminder {reminder.id} in database')
+
+        except Exception as e:
+            logger.error(f'Error handling deleted message: {e}', exc=e)
+
     def __del__(self):
         """Cleanup executor on destruction."""
         if hasattr(self, '_executor'):
