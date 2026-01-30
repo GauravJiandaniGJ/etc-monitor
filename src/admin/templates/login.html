@@ -1,0 +1,544 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ETC Monitor | Admin Access</title>
+
+    <!-- Favicon -->
+    <link rel="shortcut icon" href="{{ url_for('static', filename='images/etc1.jpg') }}" type="image/jpeg">
+    <link rel="icon" href="{{ url_for('static', filename='images/etc1.jpg') }}" type="image/jpeg">
+
+    <!-- Elegant Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,600&family=Inter:wght@300;400;500&display=swap" rel="stylesheet">
+
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        :root {
+            --bg-deep: #020617;
+            --bg-navy: #0f172a;
+            --bg-card: rgba(15, 23, 42, 0.4);
+            --gold-primary: #d4af37;
+            --gold-light: #e8d5a3;
+            --gold-dim: #9c8b4f;
+            --text-primary: #e2c9a6;
+            --text-secondary: #64748b;
+            --border: rgba(212, 175, 55, 0.15);
+            --error: #ef4444;
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background: var(--bg-deep);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+            position: relative;
+        }
+
+        /* Midnight Gradient Background */
+        .bg-animation {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 0;
+            background:
+                radial-gradient(circle at 50% 0%, #1e293b 0%, transparent 50%),
+                radial-gradient(circle at 80% 80%, #0f172a 0%, transparent 40%),
+                radial-gradient(circle at 20% 80%, #1e1b4b 0%, transparent 40%),
+                linear-gradient(to bottom, #020617 0%, #0f172a 100%);
+        }
+
+        /* Starfield Animation */
+        .stars {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 1;
+            pointer-events: none;
+        }
+
+        .star {
+            position: absolute;
+            background: white;
+            border-radius: 50%;
+            animation: twinkle var(--duration) ease-in-out infinite;
+            opacity: 0;
+        }
+
+        .star::before {
+            content: '';
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 200%;
+            height: 1px;
+            background: linear-gradient(90deg, transparent, white, transparent);
+            opacity: 0.3;
+        }
+
+        .star.gold {
+            background: var(--gold-primary);
+            box-shadow: 0 0 10px var(--gold-primary);
+        }
+
+        .star.gold::before {
+            background: linear-gradient(90deg, transparent, var(--gold-primary), transparent);
+        }
+
+        @keyframes twinkle {
+            0% { opacity: 0; transform: scale(0.6); }
+            20% { opacity: var(--opacity); }
+            40% { opacity: 0.2; }
+            60% { opacity: var(--opacity); }
+            80% { opacity: 0.3; }
+            100% { opacity: 0; transform: scale(1.2); }
+        }
+
+        /* Shooting Star */
+        .shooting-star {
+            position: absolute;
+            height: 1px;
+            background: linear-gradient(90deg, white, transparent);
+            opacity: 0;
+            animation: shoot 15s linear infinite;
+            transform: rotate(-45deg);
+        }
+
+        @keyframes shoot {
+            0% {
+                left: -10%;
+                top: 20%;
+                width: 0;
+                opacity: 0;
+            }
+            2% {
+                opacity: 1;
+                width: 100px;
+            }
+            4% {
+                left: 110%;
+                top: 80%;
+                opacity: 0;
+            }
+            100% {
+                opacity: 0;
+            }
+        }
+
+        /* Compact Glass Card */
+        .login-container {
+            position: relative;
+            z-index: 10;
+            background: var(--bg-card);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border: 1px solid var(--border);
+            box-shadow:
+                0 0 40px rgba(212, 175, 55, 0.05),
+                inset 0 0 80px rgba(255, 255, 255, 0.02),
+                0 25px 50px -12px rgba(0, 0, 0, 0.5);
+            border-radius: 24px;
+            padding: 40px 36px;
+            width: 90%;
+            max-width: 360px;  /* Reduced from 460px */
+            animation: fadeIn 1.2s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+                transform: translateY(30px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        /* Elegant Header */
+        .login-header {
+            text-align: center;
+            margin-bottom: 32px;  /* Reduced from 48px */
+        }
+
+        .brand-line {
+            width: 40px;  /* Reduced from 60px */
+            height: 1px;
+            background: linear-gradient(90deg, transparent, var(--gold-dim), transparent);
+            margin: 0 auto 20px;  /* Reduced margins */
+        }
+
+        /* Logo Image Styles */
+        .logo-icon {
+            width: 64px;  /* Reduced from 72px */
+            height: 64px;
+            margin: 0 auto 24px;  /* Reduced from 32px */
+            border: 1px solid var(--border);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+            background: radial-gradient(circle at 30% 30%, rgba(212, 175, 55, 0.1), transparent 70%);
+            position: relative;
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+        }
+
+        .logo-icon:hover {
+            transform: scale(1.05);
+            box-shadow: 0 0 20px rgba(212, 175, 55, 0.2);
+        }
+
+        .logo-icon img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            border-radius: 50%;
+        }
+
+        .brand-title {
+            font-family: 'Cormorant Garamond', serif;
+            font-size: 28px;  /* Reduced from 42px */
+            font-weight: 400;
+            color: var(--text-primary);
+            letter-spacing: 8px;  /* Reduced from 12px */
+            text-transform: uppercase;
+            margin-bottom: 8px;
+            line-height: 1.2;
+        }
+
+        .brand-subtitle {
+            font-family: 'Cormorant Garamond', serif;
+            font-size: 14px;  /* Reduced from 16px */
+            font-weight: 400;
+            color: var(--gold-dim);
+            letter-spacing: 3px;
+            font-style: italic;
+        }
+
+        /* Error Message */
+        .error-message {
+            background: rgba(239, 68, 68, 0.05);
+            border: 1px solid rgba(239, 68, 68, 0.2);
+            color: #fca5a5;
+            padding: 12px 16px;  /* Reduced padding */
+            border-radius: 8px;
+            margin-bottom: 20px;  /* Reduced from 28px */
+            font-size: 13px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            animation: shake 0.5s cubic-bezier(.36,.07,.19,.97) both;
+        }
+
+        @keyframes shake {
+            10%, 90% { transform: translate3d(-1px, 0, 0); }
+            20%, 80% { transform: translate3d(2px, 0, 0); }
+            30%, 50%, 70% { transform: translate3d(-4px, 0, 0); }
+            40%, 60% { transform: translate3d(4px, 0, 0); }
+        }
+
+        /* Form Inputs */
+        .form-group {
+            margin-bottom: 16px;  /* Reduced from 24px */
+        }
+
+        .form-input {
+            width: 100%;
+            padding: 14px 16px;  /* Reduced from 16px 20px */
+            background: rgba(2, 6, 23, 0.6);
+            border: 1px solid rgba(212, 175, 55, 0.1);
+            border-radius: 8px;
+            font-size: 14px;
+            font-family: 'Inter', sans-serif;
+            color: var(--text-primary);
+            outline: none;
+            transition: all 0.4s ease;
+            letter-spacing: 0.5px;
+        }
+
+        .form-input::placeholder {
+            color: var(--text-secondary);
+            font-weight: 300;
+            font-size: 13px;
+        }
+
+        .form-input:hover {
+            border-color: rgba(212, 175, 55, 0.25);
+            background: rgba(2, 6, 23, 0.8);
+        }
+
+        .form-input:focus {
+            border-color: var(--gold-primary);
+            box-shadow:
+                0 0 0 3px rgba(212, 175, 55, 0.1),
+                0 0 20px rgba(212, 175, 55, 0.1);
+            background: rgba(2, 6, 23, 0.9);
+        }
+
+        /* Button */
+        .submit-btn {
+            width: 100%;
+            padding: 14px;  /* Reduced from 18px */
+            margin-top: 8px;
+            background: transparent;
+            border: 1px solid var(--gold-dim);
+            border-radius: 8px;
+            color: var(--gold-primary);
+            font-size: 13px;
+            font-weight: 400;
+            font-family: 'Inter', sans-serif;
+            letter-spacing: 4px;
+            text-transform: uppercase;
+            cursor: pointer;
+            position: relative;
+            overflow: hidden;
+            transition: all 0.4s ease;
+        }
+
+        .submit-btn::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: -100%;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(
+                90deg,
+                transparent,
+                rgba(212, 175, 55, 0.1),
+                transparent
+            );
+            transition: left 0.7s;
+        }
+
+        .submit-btn:hover {
+            border-color: var(--gold-primary);
+            color: var(--gold-light);
+            box-shadow:
+                0 0 20px rgba(212, 175, 55, 0.15),
+                inset 0 0 20px rgba(212, 175, 55, 0.05);
+            letter-spacing: 5px;
+        }
+
+        .submit-btn:hover::before {
+            left: 100%;
+        }
+
+        .submit-btn:active {
+            transform: scale(0.98);
+        }
+
+        /* Loading State */
+        .submit-btn.loading {
+            pointer-events: none;
+            opacity: 0.6;
+        }
+
+        .spinner {
+            width: 18px;
+            height: 18px;
+            border: 1px solid rgba(212, 175, 55, 0.2);
+            border-top-color: var(--gold-primary);
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+            display: none;
+            margin: 0 auto;
+        }
+
+        .submit-btn.loading .spinner {
+            display: block;
+        }
+
+        .submit-btn.loading span {
+            display: none;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        /* Footer */
+        .footer {
+            margin-top: 28px;  /* Reduced from 40px */
+            text-align: center;
+        }
+
+        .footer-line {
+            width: 30px;
+            height: 1px;
+            background: var(--border);
+            margin: 0 auto 12px;
+        }
+
+        .security-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            font-family: 'Cormorant Garamond', serif;
+            font-size: 12px;
+            color: var(--gold-dim);
+            font-style: italic;
+            letter-spacing: 1px;
+        }
+
+        .dot {
+            width: 3px;
+            height: 3px;
+            background: var(--gold-primary);
+            border-radius: 50%;
+            opacity: 0.6;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 0.6; transform: scale(1); }
+            50% { opacity: 1; transform: scale(1.3); }
+        }
+
+        /* Responsive */
+        @media (max-width: 480px) {
+            .login-container {
+                margin: 16px;
+                padding: 32px 24px;
+                max-width: 320px;
+            }
+
+            .brand-title {
+                font-size: 24px;
+                letter-spacing: 6px;
+            }
+
+            .logo-icon {
+                width: 56px;
+                height: 56px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <!-- Background -->
+    <div class="bg-animation"></div>
+
+    <!-- Starfield -->
+    <div class="stars" id="stars"></div>
+
+    <!-- Shooting Stars -->
+    <div class="shooting-star" style="animation-delay: 0s;"></div>
+    <div class="shooting-star" style="animation-delay: 7s;"></div>
+    <div class="shooting-star" style="animation-delay: 14s;"></div>
+
+    <!-- Main Container - Compact -->
+    <div class="login-container">
+        <div class="login-header">
+            <div class="brand-line"></div>
+
+            <!-- Logo Image -->
+            <div class="logo-icon">
+                <img src="{{ url_for('static', filename='images/etc1.jpg') }}" alt="ETC Monitor">
+            </div>
+
+            <h1 class="brand-title">ETC<br>MONITOR</h1>
+            <p class="brand-subtitle">Admin Dashboard</p>
+        </div>
+
+        {% if error %}
+        <div class="error-message">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                <circle cx="12" cy="12" r="10"></circle>
+                <line x1="12" y1="8" x2="12" y2="12"></line>
+                <line x1="12" y1="16" x2="12.01" y2="16"></line>
+            </svg>
+            <span>{{ error }}</span>
+        </div>
+        {% endif %}
+
+        <form method="POST" action="/login" id="loginForm">
+            <div class="form-group">
+                <input
+                    type="text"
+                    id="username"
+                    name="username"
+                    class="form-input"
+                    placeholder="Admin Username"
+                    required
+                    autofocus
+                    autocomplete="username"
+                >
+            </div>
+
+            <div class="form-group">
+                <input
+                    type="password"
+                    id="password"
+                    name="password"
+                    class="form-input"
+                    placeholder="Password"
+                    required
+                    autocomplete="current-password"
+                >
+            </div>
+
+            <button type="submit" class="submit-btn" id="submitBtn">
+                <div class="spinner"></div>
+                <span>Authenticate</span>
+            </button>
+        </form>
+
+        <div class="footer">
+            <div class="footer-line"></div>
+            <div class="security-badge">
+                <span class="dot"></span>
+                <span>Secure Connection</span>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Generate random stars
+        const starsContainer = document.getElementById('stars');
+        const starCount = 80;  // Slightly reduced for smaller card
+
+        for (let i = 0; i < starCount; i++) {
+            const star = document.createElement('div');
+            star.className = Math.random() > 0.8 ? 'star gold' : 'star';
+            star.style.left = Math.random() * 100 + '%';
+            star.style.top = Math.random() * 100 + '%';
+            star.style.width = Math.random() * 2 + 1 + 'px';
+            star.style.height = star.style.width;
+            star.style.setProperty('--duration', Math.random() * 3 + 2 + 's');
+            star.style.setProperty('--opacity', Math.random() * 0.7 + 0.3);
+            star.style.animationDelay = Math.random() * 5 + 's';
+            starsContainer.appendChild(star);
+        }
+
+        // Form loading state
+        const form = document.getElementById('loginForm');
+        const submitBtn = document.getElementById('submitBtn');
+
+        form.addEventListener('submit', () => {
+            submitBtn.classList.add('loading');
+        });
+
+        // Subtle mouse parallax for stars
+        document.addEventListener('mousemove', (e) => {
+            const x = (e.clientX / window.innerWidth - 0.5) * 20;
+            const y = (e.clientY / window.innerHeight - 0.5) * 20;
+            starsContainer.style.transform = `translate(${x}px, ${y}px)`;
+        });
+    </script>
+</body>
+</html>

@@ -1,0 +1,1128 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ETC Monitor | Admin Dashboard</title>
+    
+    <!-- Favicon -->
+    <link rel="icon" href="{{ url_for('static', filename='images/etc1.jpg') }}" type="image/jpeg">
+    
+    <!-- Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,600&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.datatables.net/1.13.7/css/jquery.dataTables.min.css">
+    <link rel="stylesheet" href="https://cdn.datatables.net/responsive/2.5.0/css/responsive.dataTables.min.css">
+    
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        :root {
+            --bg-deep: #020617;
+            --bg-navy: #0f172a;
+            --bg-card: rgba(15, 23, 42, 0.6);
+            --gold-primary: #d4af37;
+            --gold-light: #e8d5a3;
+            --gold-dim: #9c8b4f;
+            --gold-border: rgba(212, 175, 55, 0.2);
+            --text-primary: #e2c9a6;
+            --text-secondary: #94a3b8;
+            --text-muted: #64748b;
+            --success: #10b981;
+            --warning: #f59e0b;
+            --danger: #ef4444;
+            --info: #3b82f6;
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background: var(--bg-deep);
+            min-height: 100vh;
+            color: var(--text-primary);
+            overflow-x: hidden;
+            position: relative;
+        }
+
+        /* Animated Starfield Background */
+        .stars {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 0;
+            pointer-events: none;
+            background: 
+                radial-gradient(circle at 50% 0%, #1e293b 0%, transparent 50%),
+                radial-gradient(circle at 80% 80%, #0f172a 0%, transparent 40%),
+                radial-gradient(circle at 20% 80%, #1e1b4b 0%, transparent 40%),
+                linear-gradient(to bottom, #020617 0%, #0f172a 100%);
+        }
+
+        .star {
+            position: absolute;
+            background: white;
+            border-radius: 50%;
+            animation: twinkle var(--duration) ease-in-out infinite;
+            opacity: 0;
+        }
+
+        .star.gold {
+            background: var(--gold-primary);
+            box-shadow: 0 0 10px var(--gold-primary);
+        }
+
+        @keyframes twinkle {
+            0% { opacity: 0; transform: scale(0.6); }
+            20% { opacity: var(--opacity); }
+            40% { opacity: 0.2; }
+            60% { opacity: var(--opacity); }
+            80% { opacity: 0.3; }
+            100% { opacity: 0; transform: scale(1.2); }
+        }
+
+        /* App Container */
+        .app {
+            position: relative;
+            z-index: 10;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* Elegant Header */
+        .header {
+            background: rgba(15, 23, 42, 0.8);
+            backdrop-filter: blur(20px);
+            border-bottom: 1px solid var(--gold-border);
+            padding: 0 2rem;
+            height: 70px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+            box-shadow: 0 4px 30px rgba(0, 0, 0, 0.5);
+        }
+
+        .logo {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .logo-img {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            border: 1px solid var(--gold-border);
+            object-fit: cover;
+            box-shadow: 0 0 20px rgba(212, 175, 55, 0.1);
+        }
+
+        .logo-text {
+            font-family: 'Cormorant Garamond', serif;
+            font-size: 24px;
+            font-weight: 400;
+            color: var(--text-primary);
+            letter-spacing: 4px;
+            text-transform: uppercase;
+        }
+
+        .header-right {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+
+        .header-btn {
+            padding: 8px 16px;
+            background: transparent;
+            border: 1px solid var(--gold-border);
+            border-radius: 8px;
+            color: var(--gold-dim);
+            cursor: pointer;
+            font-size: 13px;
+            font-weight: 400;
+            font-family: 'Inter', sans-serif;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            transition: all 0.3s ease;
+            text-decoration: none;
+        }
+
+        .header-btn:hover {
+            border-color: var(--gold-primary);
+            color: var(--gold-light);
+            background: rgba(212, 175, 55, 0.05);
+            box-shadow: 0 0 20px rgba(212, 175, 55, 0.1);
+        }
+
+        .status-indicator {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 12px;
+            background: rgba(16, 185, 129, 0.1);
+            border: 1px solid rgba(16, 185, 129, 0.3);
+            border-radius: 20px;
+            color: var(--success);
+            font-size: 12px;
+            font-weight: 500;
+            letter-spacing: 0.5px;
+        }
+
+        .status-dot {
+            width: 6px;
+            height: 6px;
+            background: var(--success);
+            border-radius: 50%;
+            animation: pulse 2s infinite;
+            box-shadow: 0 0 10px var(--success);
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.5; transform: scale(0.8); }
+        }
+
+        /* Main Content */
+        .main {
+            flex: 1;
+            padding: 32px 24px;
+            max-width: 1400px;
+            margin: 0 auto;
+            width: 100%;
+        }
+
+        /* Stats Grid - Compact and Elegant */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            margin-bottom: 32px;
+        }
+
+        .stat-card {
+            background: var(--bg-card);
+            backdrop-filter: blur(10px);
+            border: 1px solid var(--gold-border);
+            border-radius: 12px;
+            padding: 20px;
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            transition: all 0.3s ease;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .stat-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 2px;
+            background: linear-gradient(90deg, transparent, var(--gold-primary), transparent);
+            opacity: 0;
+            transition: opacity 0.3s;
+        }
+
+        .stat-card:hover {
+            transform: translateY(-2px);
+            border-color: rgba(212, 175, 55, 0.4);
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.3), 0 0 20px rgba(212, 175, 55, 0.05);
+        }
+
+        .stat-card:hover::before {
+            opacity: 1;
+        }
+
+        .stat-icon {
+            width: 44px;
+            height: 44px;
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 20px;
+            background: rgba(212, 175, 55, 0.1);
+            border: 1px solid var(--gold-border);
+            color: var(--gold-primary);
+        }
+
+        .stat-icon.total { color: var(--gold-primary); }
+        .stat-icon.pending { color: var(--warning); border-color: rgba(245, 158, 11, 0.3); background: rgba(245, 158, 11, 0.1); }
+        .stat-icon.sent { color: var(--success); border-color: rgba(16, 185, 129, 0.3); background: rgba(16, 185, 129, 0.1); }
+        .stat-icon.cancelled { color: var(--danger); border-color: rgba(239, 68, 68, 0.3); background: rgba(239, 68, 68, 0.1); }
+
+        .stat-content { flex: 1; }
+        
+        .stat-value {
+            font-family: 'Cormorant Garamond', serif;
+            font-size: 32px;
+            font-weight: 600;
+            color: var(--text-primary);
+            line-height: 1;
+            margin-bottom: 4px;
+        }
+        
+        .stat-label {
+            font-size: 11px;
+            font-weight: 500;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 1.5px;
+        }
+
+        /* Content Card */
+        .content-card {
+            background: var(--bg-card);
+            backdrop-filter: blur(20px);
+            border: 1px solid var(--gold-border);
+            border-radius: 16px;
+            overflow: hidden;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.4);
+        }
+
+        .content-header {
+            padding: 24px;
+            border-bottom: 1px solid var(--gold-border);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            flex-wrap: wrap;
+            gap: 16px;
+        }
+
+        .content-title {
+            font-family: 'Cormorant Garamond', serif;
+            font-size: 20px;
+            font-weight: 400;
+            color: var(--text-primary);
+            letter-spacing: 2px;
+        }
+
+        .header-actions {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .tabs {
+            display: flex;
+            background: rgba(2, 6, 23, 0.6);
+            border-radius: 8px;
+            padding: 4px;
+            gap: 4px;
+            border: 1px solid var(--gold-border);
+        }
+
+        .tab {
+            padding: 8px 16px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: 500;
+            font-size: 13px;
+            color: var(--text-secondary);
+            border: none;
+            background: transparent;
+            transition: all 0.3s ease;
+            font-family: 'Inter', sans-serif;
+        }
+
+        .tab:hover {
+            color: var(--text-primary);
+        }
+
+        .tab.active {
+            background: rgba(212, 175, 55, 0.15);
+            color: var(--gold-light);
+            border: 1px solid var(--gold-border);
+        }
+
+        .refresh-btn {
+            padding: 8px 16px;
+            background: transparent;
+            border: 1px solid var(--gold-border);
+            border-radius: 8px;
+            color: var(--gold-dim);
+            cursor: pointer;
+            font-size: 13px;
+            font-weight: 500;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            transition: all 0.3s ease;
+            font-family: 'Inter', sans-serif;
+        }
+
+        .refresh-btn:hover {
+            border-color: var(--gold-primary);
+            color: var(--gold-light);
+            background: rgba(212, 175, 55, 0.05);
+        }
+
+        .refresh-btn.loading svg {
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+        }
+
+        /* DataTables Dark Theme Customization */
+        .table-container {
+            padding: 0;
+        }
+
+        .dataTables_wrapper {
+            padding: 24px;
+        }
+
+        .dataTables_wrapper .dataTables_length,
+        .dataTables_wrapper .dataTables_filter {
+            margin-bottom: 20px;
+        }
+
+        .dataTables_wrapper .dataTables_length label,
+        .dataTables_wrapper .dataTables_filter label {
+            color: var(--text-secondary);
+            font-size: 13px;
+        }
+
+        .dataTables_wrapper .dataTables_length select,
+        .dataTables_wrapper .dataTables_filter input {
+            padding: 8px 12px;
+            border: 1px solid var(--gold-border);
+            border-radius: 8px;
+            background: rgba(2, 6, 23, 0.6);
+            color: var(--text-primary);
+            font-size: 13px;
+            font-family: 'Inter', sans-serif;
+            margin-left: 8px;
+        }
+
+        .dataTables_wrapper .dataTables_length select:focus,
+        .dataTables_wrapper .dataTables_filter input:focus {
+            outline: none;
+            border-color: var(--gold-primary);
+            box-shadow: 0 0 0 3px rgba(212, 175, 55, 0.1);
+        }
+
+        .dataTables_wrapper .dataTables_filter input {
+            width: 200px;
+        }
+
+        .dataTables_wrapper .dataTables_info {
+            color: var(--text-muted);
+            font-size: 12px;
+            margin-top: 16px;
+        }
+
+        .dataTables_wrapper .dataTables_paginate {
+            margin-top: 16px;
+        }
+
+        .dataTables_wrapper .dataTables_paginate .paginate_button {
+            padding: 6px 12px;
+            border-radius: 6px;
+            border: 1px solid var(--gold-border) !important;
+            background: transparent !important;
+            color: var(--text-secondary) !important;
+            margin: 0 2px;
+            font-size: 13px;
+            transition: all 0.2s;
+        }
+
+        .dataTables_wrapper .dataTables_paginate .paginate_button:hover {
+            background: rgba(212, 175, 55, 0.1) !important;
+            color: var(--gold-light) !important;
+            border-color: var(--gold-primary) !important;
+        }
+
+        .dataTables_wrapper .dataTables_paginate .paginate_button.current {
+            background: rgba(212, 175, 55, 0.2) !important;
+            color: var(--gold-light) !important;
+            border-color: var(--gold-primary) !important;
+        }
+
+        .dataTables_wrapper .dataTables_paginate .paginate_button.disabled {
+            opacity: 0.3;
+            cursor: not-allowed;
+        }
+
+        table.dataTable {
+            border-collapse: collapse !important;
+            width: 100% !important;
+            border: none !important;
+        }
+
+        table.dataTable thead th {
+            padding: 16px;
+            text-align: left;
+            font-weight: 600;
+            font-size: 11px;
+            color: var(--gold-dim);
+            background: rgba(2, 6, 23, 0.4);
+            border-bottom: 1px solid var(--gold-border);
+            text-transform: uppercase;
+            letter-spacing: 1.5px;
+            font-family: 'Inter', sans-serif;
+        }
+
+        table.dataTable tbody td {
+            padding: 16px;
+            border-bottom: 1px solid rgba(212, 175, 55, 0.1);
+            vertical-align: middle;
+            color: var(--text-secondary);
+            font-size: 13px;
+        }
+
+        table.dataTable tbody tr {
+            background: transparent !important;
+            transition: background 0.2s;
+        }
+
+        table.dataTable tbody tr:hover {
+            background: rgba(212, 175, 55, 0.05) !important;
+        }
+
+        /* Badges */
+        .user-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 4px 12px 4px 4px;
+            background: rgba(212, 175, 55, 0.1);
+            border: 1px solid var(--gold-border);
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 500;
+            color: var(--text-primary);
+        }
+
+        .user-avatar {
+            width: 24px;
+            height: 24px;
+            background: linear-gradient(135deg, rgba(212, 175, 55, 0.8), rgba(212, 175, 55, 0.4));
+            color: var(--bg-deep);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 10px;
+            font-weight: 700;
+            font-family: 'Inter', sans-serif;
+        }
+
+        .channel-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            color: var(--text-muted);
+            font-size: 12px;
+            font-family: 'SF Mono', monospace;
+        }
+
+        .channel-badge::before {
+            content: '#';
+            color: var(--gold-dim);
+        }
+
+        .status-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 4px 10px;
+            border-radius: 20px;
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            border: 1px solid;
+        }
+
+        .status-badge.pending { background: rgba(245, 158, 11, 0.1); color: var(--warning); border-color: rgba(245, 158, 11, 0.3); }
+        .status-badge.sent { background: rgba(16, 185, 129, 0.1); color: var(--success); border-color: rgba(16, 185, 129, 0.3); }
+        .status-badge.cancelled { background: rgba(239, 68, 68, 0.1); color: var(--danger); border-color: rgba(239, 68, 68, 0.3); }
+        .status-badge.failed { background: rgba(239, 68, 68, 0.1); color: var(--danger); border-color: rgba(239, 68, 68, 0.3); }
+        .status-badge.rescheduled { background: rgba(59, 130, 246, 0.1); color: var(--info); border-color: rgba(59, 130, 246, 0.3); }
+
+        .status-dot-sm {
+            width: 4px;
+            height: 4px;
+            border-radius: 50%;
+        }
+
+        .status-dot-sm.pending { background: var(--warning); }
+        .status-dot-sm.sent { background: var(--success); }
+        .status-dot-sm.cancelled { background: var(--danger); }
+        .status-dot-sm.failed { background: var(--danger); }
+        .status-dot-sm.rescheduled { background: var(--info); }
+
+        /* Message Preview */
+        .message-preview {
+            max-width: 200px;
+            color: var(--text-muted);
+            font-size: 12px;
+            line-height: 1.4;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        /* Time Stamps */
+        .time-stamp {
+            color: var(--text-muted);
+            font-size: 12px;
+            font-family: 'SF Mono', Monaco, monospace;
+            letter-spacing: 0.5px;
+        }
+
+        .time-primary {
+            color: var(--gold-light);
+            font-weight: 500;
+        }
+
+        /* Action Buttons */
+        .btn {
+            padding: 6px 12px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 11px;
+            font-weight: 600;
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            transition: all 0.2s;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .btn-cancel {
+            background: rgba(239, 68, 68, 0.1);
+            color: var(--danger);
+            border: 1px solid rgba(239, 68, 68, 0.3);
+        }
+
+        .btn-cancel:hover {
+            background: var(--danger);
+            color: white;
+            box-shadow: 0 0 15px rgba(239, 68, 68, 0.3);
+        }
+
+        /* Loading & Error States */
+        .loading-container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 60px 20px;
+            color: var(--text-muted);
+        }
+
+        .spinner {
+            width: 40px;
+            height: 40px;
+            border: 2px solid var(--gold-border);
+            border-top-color: var(--gold-primary);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin-bottom: 16px;
+            box-shadow: 0 0 20px rgba(212, 175, 55, 0.2);
+        }
+
+        .error-container {
+            background: rgba(239, 68, 68, 0.1);
+            border: 1px solid rgba(239, 68, 68, 0.3);
+            color: #fca5a5;
+            padding: 16px 20px;
+            border-radius: 10px;
+            margin: 20px;
+            text-align: center;
+            font-size: 14px;
+        }
+
+        /* Empty State */
+        .empty-state {
+            text-align: center;
+            padding: 60px 20px;
+            color: var(--text-muted);
+        }
+
+        .empty-state-icon {
+            width: 60px;
+            height: 60px;
+            background: rgba(212, 175, 55, 0.1);
+            border: 1px solid var(--gold-border);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto 16px;
+            font-size: 24px;
+            color: var(--gold-dim);
+        }
+
+        .empty-state h3 {
+            font-family: 'Cormorant Garamond', serif;
+            font-size: 18px;
+            font-weight: 400;
+            color: var(--text-secondary);
+            margin-bottom: 8px;
+            letter-spacing: 1px;
+        }
+
+        /* Toast Notifications */
+        .toast-container {
+            position: fixed;
+            bottom: 24px;
+            right: 24px;
+            z-index: 1000;
+        }
+
+        .toast {
+            padding: 14px 20px;
+            border-radius: 8px;
+            margin-top: 10px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            animation: slideIn 0.3s ease;
+            border: 1px solid;
+            backdrop-filter: blur(10px);
+        }
+
+        .toast.success {
+            background: rgba(16, 185, 129, 0.1);
+            color: var(--success);
+            border-color: rgba(16, 185, 129, 0.3);
+        }
+
+        .toast.error {
+            background: rgba(239, 68, 68, 0.1);
+            color: var(--danger);
+            border-color: rgba(239, 68, 68, 0.3);
+        }
+
+        @keyframes slideIn {
+            from { transform: translateX(100%); opacity: 0; }
+            to { transform: translateX(0); opacity: 1; }
+        }
+
+        /* Responsive */
+        @media (max-width: 768px) {
+            .stats-grid {
+                grid-template-columns: repeat(2, 1fr);
+            }
+            
+            .header {
+                padding: 0 1rem;
+            }
+            
+            .main {
+                padding: 20px 16px;
+            }
+            
+            .content-header {
+                flex-direction: column;
+                align-items: flex-start;
+            }
+        }
+    </style>
+</head>
+<body>
+    <!-- Starfield Background -->
+    <div class="stars" id="stars"></div>
+
+    <div class="app">
+        <header class="header">
+            <div class="logo">
+                <img src="{{ url_for('static', filename='images/etc1.jpg') }}" alt="ETC" class="logo-img">
+                <span class="logo-text">ETC Monitor</span>
+            </div>
+            <div class="header-right">
+                <div class="status-indicator">
+                    <div class="status-dot"></div>
+                    <span>System Online</span>
+                </div>
+                <a href="/logout" class="header-btn">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4M16 17l5-5-5-5M21 12H9"/>
+                    </svg>
+                    Logout
+                </a>
+            </div>
+        </header>
+
+        <main class="main">
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <div class="stat-icon total">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                            <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
+                            <line x1="16" y1="2" x2="16" y2="6"></line>
+                            <line x1="8" y1="2" x2="8" y2="6"></line>
+                            <line x1="3" y1="10" x2="21" y2="10"></line>
+                        </svg>
+                    </div>
+                    <div class="stat-content">
+                        <div class="stat-value" id="stat-total">-</div>
+                        <div class="stat-label">Total Reminders</div>
+                    </div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-icon pending">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                            <circle cx="12" cy="12" r="10"></circle>
+                            <polyline points="12 6 12 12 16 14"></polyline>
+                        </svg>
+                    </div>
+                    <div class="stat-content">
+                        <div class="stat-value" id="stat-pending">-</div>
+                        <div class="stat-label">Pending</div>
+                    </div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-icon sent">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                            <polyline points="20 6 9 17 4 12"></polyline>
+                        </svg>
+                    </div>
+                    <div class="stat-content">
+                        <div class="stat-value" id="stat-sent">-</div>
+                        <div class="stat-label">Sent</div>
+                    </div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-icon cancelled">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                            <circle cx="12" cy="12" r="10"></circle>
+                            <line x1="15" y1="9" x2="9" y2="15"></line>
+                            <line x1="9" y1="9" x2="15" y2="15"></line>
+                        </svg>
+                    </div>
+                    <div class="stat-content">
+                        <div class="stat-value" id="stat-cancelled">-</div>
+                        <div class="stat-label">Cancelled</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="content-card">
+                <div class="content-header">
+                    <h2 class="content-title">Reminder Management</h2>
+                    <div class="header-actions">
+                        <div class="tabs">
+                            <button class="tab active" data-tab="all">All Reminders</button>
+                            <button class="tab" data-tab="pending">Pending Only</button>
+                        </div>
+                        <button class="refresh-btn" onclick="refreshData()">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <polyline points="23 4 23 10 17 10"></polyline>
+                                <path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"></path>
+                            </svg>
+                            Refresh
+                        </button>
+                    </div>
+                </div>
+
+                <div class="table-container">
+                    <div id="loading-container" class="loading-container">
+                        <div class="spinner"></div>
+                        <span style="font-size: 14px; letter-spacing: 1px;">Loading reminders...</span>
+                    </div>
+                    <div id="error-container" class="error-container" style="display:none;"></div>
+                    <table id="reminders-table" class="display stripe" style="display:none;width:100%">
+                        <thead>
+                            <tr>
+                                <th>User</th>
+                                <th>Channel</th>
+                                <th>Message</th>
+                                <th>Deadline</th>
+                                <th>Reminder</th>
+                                <th>Status</th>
+                                <th>Created</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody></tbody>
+                    </table>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <div class="toast-container" id="toast-container"></div>
+
+    <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+    <script src="https://cdn.datatables.net/1.13.7/js/jquery.dataTables.min.js"></script>
+    <script src="https://cdn.datatables.net/responsive/2.5.0/js/dataTables.responsive.min.js"></script>
+    <script>
+        let dataTable = null;
+        let currentTab = 'all';
+        let allReminders = [];
+
+        // Generate stars
+        const starsContainer = document.getElementById('stars');
+        for (let i = 0; i < 100; i++) {
+            const star = document.createElement('div');
+            star.className = Math.random() > 0.9 ? 'star gold' : 'star';
+            star.style.left = Math.random() * 100 + '%';
+            star.style.top = Math.random() * 100 + '%';
+            star.style.width = Math.random() * 2 + 1 + 'px';
+            star.style.height = star.style.width;
+            star.style.setProperty('--duration', Math.random() * 3 + 2 + 's');
+            star.style.setProperty('--opacity', Math.random() * 0.7 + 0.3);
+            star.style.animationDelay = Math.random() * 5 + 's';
+            starsContainer.appendChild(star);
+        }
+
+        // Toast Notifications
+        function showToast(message, type = 'success') {
+            const container = document.getElementById('toast-container');
+            const toast = document.createElement('div');
+            toast.className = `toast ${type}`;
+            toast.innerHTML = `
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    ${type === 'success' ? '<polyline points="20 6 9 17 4 12"></polyline>' : '<circle cx="12" cy="12" r="10"></circle><line x1="15" y1="9" x2="9" y2="15"></line><line x1="9" y1="9" x2="15" y2="15"></line>'}
+                </svg>
+                <span>${message}</span>
+            `;
+            container.appendChild(toast);
+            setTimeout(() => toast.remove(), 4000);
+        }
+
+        // Data Formatting
+        function formatDate(dateStr) {
+            if (!dateStr) return '-';
+            try {
+                const date = new Date(dateStr);
+                if (isNaN(date.getTime())) return '-';
+                return date.toLocaleString('en-IN', {
+                    day: '2-digit',
+                    month: 'short',
+                    year: 'numeric',
+                    hour: '2-digit',
+                    minute: '2-digit',
+                    hour12: true
+                });
+            } catch (e) {
+                return '-';
+            }
+        }
+
+        function getUserInitial(userId, userName) {
+            if (userName && userName !== '-' && userName !== userId) {
+                return userName.charAt(0).toUpperCase();
+            }
+            if (userId && userId !== '-') {
+                return userId.charAt(0).toUpperCase();
+            }
+            return '?';
+        }
+
+        function formatUserName(reminder) {
+            if (reminder.user_name && reminder.user_name !== reminder.user_id && reminder.user_name !== '-') {
+                return reminder.user_name;
+            }
+            return reminder.user_id || '-';
+        }
+
+        function formatChannelName(reminder) {
+            let name = reminder.channel_name || reminder.channel_id || '-';
+            return name.replace(/^#/, '');
+        }
+
+        function escapeHtml(str) {
+            if (!str) return '';
+            return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;');
+        }
+
+        // Tab Management
+        document.querySelectorAll('.tab').forEach(tab => {
+            tab.addEventListener('click', function() {
+                document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+                this.classList.add('active');
+                currentTab = this.dataset.tab;
+                loadReminders();
+            });
+        });
+
+        // Initialize DataTable
+        function initDataTable() {
+            if (dataTable) {
+                dataTable.destroy();
+            }
+
+            dataTable = $('#reminders-table').DataTable({
+                responsive: true,
+                pageLength: 25,
+                lengthMenu: [[10, 25, 50, 100, -1], [10, 25, 50, 100, "All"]],
+                order: [[6, 'desc']],
+                language: {
+                    search: "Search:",
+                    lengthMenu: "Show _MENU_ entries",
+                    info: "Showing _START_ to _END_ of _TOTAL_ entries",
+                    infoEmpty: "No reminders found",
+                    infoFiltered: "(filtered from _MAX_ total)",
+                    paginate: {
+                        first: "First",
+                        last: "Last",
+                        next: "Next",
+                        previous: "Prev"
+                    }
+                },
+                columnDefs: [
+                    { orderable: false, targets: [7] },
+                    { className: 'dt-head-left', targets: '_all' }
+                ]
+            });
+        }
+
+        // Load Reminders
+        function loadReminders() {
+            const loadingEl = document.getElementById('loading-container');
+            const errorEl = document.getElementById('error-container');
+            const tableEl = document.getElementById('reminders-table');
+
+            loadingEl.style.display = 'flex';
+            errorEl.style.display = 'none';
+            tableEl.style.display = 'none';
+
+            const statusParam = currentTab === 'pending' ? '&status=pending' : '';
+
+            fetch(`/api/reminders?limit=1000${statusParam}`)
+                .then(response => {
+                    if (!response.ok) {
+                        if (response.status === 401) {
+                            window.location.href = '/login';
+                            return;
+                        }
+                        throw new Error(`HTTP ${response.status}`);
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    loadingEl.style.display = 'none';
+                    tableEl.style.display = 'table';
+
+                    allReminders = data.reminders || [];
+                    updateStats(data);
+                    populateTable(allReminders);
+                })
+                .catch(error => {
+                    loadingEl.style.display = 'none';
+                    errorEl.style.display = 'block';
+                    errorEl.textContent = 'Error loading reminders: ' + error.message;
+                });
+        }
+
+        // Update Stats
+        function updateStats(data) {
+            if (data.stats) {
+                document.getElementById('stat-total').textContent = data.total || 0;
+                document.getElementById('stat-pending').textContent = data.stats.pending || 0;
+                document.getElementById('stat-sent').textContent = data.stats.sent || 0;
+                document.getElementById('stat-cancelled').textContent = (data.stats.cancelled || 0) + (data.stats.failed || 0);
+            }
+        }
+
+        // Populate Table
+        function populateTable(reminders) {
+            if (dataTable) {
+                dataTable.destroy();
+            }
+
+            const tbody = document.querySelector('#reminders-table tbody');
+            tbody.innerHTML = '';
+
+            if (reminders.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="8" class="empty-state"><div class="empty-state-icon">📭</div><h3>No reminders found</h3></td></tr>';
+            } else {
+                reminders.forEach(reminder => {
+                    const row = document.createElement('tr');
+                    const status = (reminder.status || 'pending').toLowerCase();
+                    const userName = formatUserName(reminder);
+                    const channelName = formatChannelName(reminder);
+                    const message = escapeHtml(reminder.deadline_text || '-');
+
+                    row.innerHTML = `
+                        <td>
+                            <div class="user-badge">
+                                <div class="user-avatar">${getUserInitial(reminder.user_id, reminder.user_name)}</div>
+                                <span>${escapeHtml(userName)}</span>
+                            </div>
+                        </td>
+                        <td><span class="channel-badge">${escapeHtml(channelName)}</span></td>
+                        <td><div class="message-preview" title="${message}">${message.substring(0, 40)}${message.length > 40 ? '...' : ''}</div></td>
+                        <td><span class="time-stamp time-primary">${formatDate(reminder.deadline_datetime)}</span></td>
+                        <td><span class="time-stamp">${formatDate(reminder.reminder_datetime)}</span></td>
+                        <td>
+                            <span class="status-badge ${status}">
+                                <span class="status-dot-sm ${status}"></span>
+                                ${status}
+                            </span>
+                        </td>
+                        <td><span class="time-stamp">${formatDate(reminder.created_at)}</span></td>
+                        <td>
+                            ${status === 'pending' ? `<button class="btn btn-cancel" onclick="cancelReminder(${reminder.id})">Cancel</button>` : '-'}
+                        </td>
+                    `;
+                    tbody.appendChild(row);
+                });
+            }
+
+            initDataTable();
+        }
+
+        // Cancel Reminder
+        function cancelReminder(id) {
+            if (!confirm('Are you sure you want to cancel this reminder?')) return;
+
+            fetch(`/api/reminders/${id}/cancel`, { method: 'POST' })
+                .then(response => {
+                    if (!response.ok) {
+                        if (response.status === 401) {
+                            window.location.href = '/login';
+                            return;
+                        }
+                        throw new Error('Failed to cancel');
+                    }
+                    return response.json();
+                })
+                .then(() => {
+                    showToast('Reminder cancelled successfully');
+                    loadReminders();
+                })
+                .catch(error => {
+                    showToast('Error: ' + error.message, 'error');
+                });
+        }
+
+        // Refresh Data
+        function refreshData() {
+            const btn = document.querySelector('.refresh-btn');
+            btn.classList.add('loading');
+            loadReminders();
+            setTimeout(() => btn.classList.remove('loading'), 1000);
+        }
+
+        // Initialize
+        loadReminders();
+
+        // Auto-refresh every 30 seconds
+        setInterval(loadReminders, 30000);
+    </script>
+</body>
+</html>
