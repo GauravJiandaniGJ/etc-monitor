@@ -308,6 +308,73 @@ class MessageHandler:
 
         except Exception as e:
             logger.error(f'Error handling deleted message: {e}', exc=e)
+    
+    def handle_dm_message(
+        self,
+        event: dict,
+        say: Callable
+    ) -> None:
+        """Handle Direct Message events (no threading required).
+        
+        In DMs, we don't require threading - any message is processed.
+        We use message_ts as the thread_ts for consistency with the database.
+        
+        Args:
+            event: Slack event dictionary
+            say: Slack Bolt say function for responding
+        """
+        try:
+            # Extract message data
+            text = event.get("text", "").strip()
+            channel_id = event.get("channel")  # This is the DM channel ID
+            user_id = event.get("user")
+            message_ts = event.get("ts")
+            
+            # Validate required fields
+            if not all([text, channel_id, user_id, message_ts]):
+                logger.warning('Missing required fields in DM event')
+                return
+            
+            # Type safety checks
+            if not all(isinstance(x, str) for x in [channel_id, user_id, message_ts]):
+                logger.warning('Invalid field types in DM event')
+                return
+            
+            # Check for bot messages (ignore messages from the bot itself)
+            if event.get("bot_id"):
+                logger.debug('Ignoring bot message in DM')
+                return
+            
+            logger.info(f'Processing DM from user {user_id}:')
+            logger.info(f'  - Text: "{text}"')
+            logger.info(f'  - Channel: {channel_id}')
+            logger.info(f'  - Message TS: {message_ts}')
+            
+            # Check for ETC indicator
+            has_etc = self.deadline_service.has_etc_indicator(text)
+            if not has_etc:
+                logger.debug(f'No ETC indicator in DM: "{text}"')
+                return
+            
+            logger.info('ETC indicator detected in DM - processing')
+            
+            # For DMs, use message_ts as thread_ts (self-threaded)
+            # This ensures consistency with the database structure
+            thread_ts = message_ts
+            
+            # Type safety assertions
+            assert isinstance(channel_id, str)
+            assert isinstance(user_id, str)
+            assert isinstance(message_ts, str)
+            
+            # Process in background
+            self._executor.submit(
+                self._process_deadline_async,
+                text, channel_id, thread_ts, user_id, message_ts
+            )
+            
+        except Exception as e:
+            logger.error(f'Error handling DM: {e}', exc=e)
 
     def __del__(self):
         """Cleanup executor on destruction."""

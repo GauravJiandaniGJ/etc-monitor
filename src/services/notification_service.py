@@ -323,6 +323,56 @@ class NotificationService:
         # Cache the fallback to avoid repeated API calls
         self.channel_cache[channel_id] = channel_id
         return channel_id
+    
+    def send_dm(self, user_id: str, message: str) -> bool:
+        """Send a direct message to a user.
+        
+        Opens a DM conversation with the user and sends a message.
+        Used for daily summaries and direct notifications.
+        
+        Args:
+            user_id: Slack user ID
+            message: Message text to send
+            
+        Returns:
+            True if sent successfully, False otherwise
+        """
+        logger.info(f'Sending DM to user {user_id}')
+        
+        try:
+            # Open a DM conversation with the user
+            # This returns a channel ID for the DM
+            dm_response = self.client.conversations_open(users=user_id)
+            
+            if not dm_response['ok']:
+                error = dm_response.get('error', 'Unknown error')
+                logger.error(f'Failed to open DM with {user_id}: {error}')
+                return False
+            
+            # Get the DM channel ID
+            dm_channel_id = dm_response['channel']['id']
+            logger.debug(f'Opened DM channel {dm_channel_id} for user {user_id}')
+            
+            # Send the message to the DM channel
+            msg_response = self.client.chat_postMessage(
+                channel=dm_channel_id,
+                text=message
+            )
+            
+            if msg_response['ok']:
+                logger.success(f'DM sent successfully to {user_id}')
+                return True
+            else:
+                error = msg_response.get('error', 'Unknown error')
+                logger.error(f'Failed to send DM to {user_id}: {error}')
+                return False
+                
+        except SlackApiError as e:
+            logger.error(f'Slack API error sending DM to {user_id}: {e}')
+            return False
+        except Exception as e:
+            logger.error(f'Unexpected error sending DM to {user_id}: {e}')
+            return False
 
     def clear_cache(self):
         """Clear user and channel name caches.

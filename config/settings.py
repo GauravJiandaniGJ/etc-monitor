@@ -45,6 +45,14 @@ class Settings:
     timezone: str = field(init=False, default='Asia/Kolkata')
     debug: bool = field(init=False, default=False)
     log_level: str = field(init=False, default='INFO')
+    
+    # Daily Summary Configuration
+    daily_summary_enabled: bool = field(init=False, default=True)
+    daily_summary_hour: int = field(init=False, default=9)
+    daily_summary_minute: int = field(init=False, default=0)
+    
+    # DM Support Configuration
+    enable_dm_support: bool = field(init=False, default=True)
 
     def __post_init__(self):
         """Load and validate environment variables after initialization."""
@@ -82,6 +90,14 @@ class Settings:
         self.timezone = os.environ.get('TIMEZONE', 'Asia/Kolkata')
         self.debug = os.environ.get('DEBUG', 'false').lower() in ('true', '1', 'yes')
         self.log_level = os.environ.get('LOG_LEVEL', 'INFO').upper()
+        
+        # Load daily summary configuration
+        self.daily_summary_enabled = os.environ.get('DAILY_SUMMARY_ENABLED', 'true').lower() in ('true', '1', 'yes')
+        self.daily_summary_hour = int(os.environ.get('DAILY_SUMMARY_HOUR', '9'))
+        self.daily_summary_minute = int(os.environ.get('DAILY_SUMMARY_MINUTE', '0'))
+        
+        # Load DM support configuration
+        self.enable_dm_support = os.environ.get('ENABLE_DM_SUPPORT', 'true').lower() in ('true', '1', 'yes')
 
         # Validate configuration
         self._validate()

@@ -16,6 +16,7 @@ from src.parsers.ai_parser import AIParser
 from src.services.deadline_service import DeadlineService
 from src.services.reminder_service import ReminderService
 from src.services.notification_service import NotificationService
+from src.services.etc_summary_service import ETCSummaryService
 
 from src.bot.scheduler.reminder_scheduler import ReminderScheduler
 from src.bot.handlers.message_handler import MessageHandler
@@ -91,6 +92,13 @@ class SlackBot:
         # Initialize Slack client
         slack_client = WebClient(token=settings.slack_bot_token)
         self.notification_service = NotificationService(slack_client)
+        
+        # Initialize ETC summary service
+        logger.info('Initializing ETC summary service')
+        self.etc_summary_service = ETCSummaryService(
+            reminder_repo=self.reminder_repo,
+            notification_service=self.notification_service
+        )
 
         # Initialize scheduler
         logger.info('Initializing scheduler')
@@ -107,7 +115,8 @@ class SlackBot:
 
         self.command_handler = CommandHandler(
             reminder_service=self.reminder_service,
-            notification_service=self.notification_service
+            notification_service=self.notification_service,
+            etc_summary_service=self.etc_summary_service
         )
 
         # Initialize Slack Bolt app
@@ -132,10 +141,10 @@ class SlackBot:
         """Register all event and command handlers."""
         logger.info('Registering event handlers')
 
-        # Message event handler - ONLY process thread replies (strict filtering)
+        # Message event handler - Process both thread replies AND DMs
         @self.app.event("message")
         def handle_message_event(body, event, say):
-            """Handle message events - ONLY thread replies (includes edited and deleted messages)."""
+            """Handle message events - thread replies in channels AND direct messages."""
             # Handle new messages, edited messages, and deleted messages
             subtype = event.get("subtype")
             is_edit = subtype == "message_changed"
@@ -143,6 +152,10 @@ class SlackBot:
 
             logger.info(f'[APP] Received message event - subtype: {subtype}, is_edit: {is_edit}, is_delete: {is_delete}')
 
+            # Check if this is a DM (channel_type = "im")
+            channel_type = event.get("channel_type")
+            is_dm = channel_type == "im"
+            
             # Handle deleted messages
             if is_delete:
                 previous_message = event.get("previous_message", {})
@@ -175,7 +188,23 @@ class SlackBot:
                 thread_ts = event.get("thread_ts")
                 logger.info(f'[APP] New message - thread_ts: {thread_ts}')
 
-            # CRITICAL: Only process messages that are thread replies
+            # Process logic:
+            # - For DMs (is_dm=True): Process any message (no thread requirement)
+            # - For channels (is_dm=False): Only process thread replies
+            if is_dm:
+                # DM message - always process if DM support is enabled
+                if self.settings.enable_dm_support:
+                    logger.info('[APP] DM detected - passing to DM handler')
+                    if is_edit:
+                        message_data = event.get("message", {})
+                        self.message_handler.handle_dm_message(message_data, say)
+                    else:
+                        self.message_handler.handle_dm_message(event, say)
+                else:
+                    logger.info('[APP] DM support disabled - skipping')
+                return
+            
+            # Channel message - only process thread replies
             if not thread_ts:
                 logger.info('[APP] No thread_ts found - skipping (not a thread reply)')
                 return
@@ -188,6 +217,13 @@ class SlackBot:
             logger.info('[APP] Passing to message handler')
             # Only process thread replies
             self.message_handler.handle_message(event, say)
+
+        # App mention handler - responds when bot is @mentioned
+        @self.app.event("app_mention")
+        def handle_app_mention(event, say):
+            """Handle app mention events - when someone @mentions the bot."""
+            logger.info(f'[APP] Bot mentioned by user {event.get("user")}')
+            say("Hello from your bot!")
 
         # Slash command handlers
         @self.app.command("/my-reminders")
@@ -204,6 +240,11 @@ class SlackBot:
         def handle_list_thread_reminders_command(ack, respond, command):
             """Handle /list-thread-reminders command."""
             self.command_handler.handle_list_thread_reminders(ack, respond, command)
+        
+        @self.app.command("/etc-summary")
+        def handle_etc_summary_command(ack, respond, command):
+            """Handle /etc-summary command."""
+            self.command_handler.handle_etc_summary(ack, respond, command)
 
         logger.success('Event handlers registered')
 
@@ -226,6 +267,39 @@ class SlackBot:
 
             loaded_count = self.scheduler.load_pending_reminders(reminder_callback)
             logger.info(f'Loaded {loaded_count} pending reminders from database')
+            
+            # Schedule daily summary job if enabled
+            if self.settings.daily_summary_enabled:
+                from apscheduler.triggers.cron import CronTrigger
+                
+                def daily_summary_callback():
+                    """Callback for daily summary job."""
+                    try:
+                        logger.info('Running daily ETC summary...')
+                        sent_count = self.etc_summary_service.send_daily_summaries()
+                        logger.success(f'Daily summary complete: {sent_count} summaries sent')
+                    except Exception as e:
+                        logger.error(f'Error in daily summary job: {e}', exc=e)
+                
+                # Schedule daily at configured time
+                self.scheduler.scheduler.add_job(
+                    func=daily_summary_callback,
+                    trigger=CronTrigger(
+                        hour=self.settings.daily_summary_hour,
+                        minute=self.settings.daily_summary_minute,
+                        timezone=self.settings.timezone
+                    ),
+                    id='daily_etc_summary',
+                    name='Daily ETC Summary',
+                    replace_existing=True
+                )
+                
+                logger.success(
+                    f'Daily summary scheduled at {self.settings.daily_summary_hour:02d}:'
+                    f'{self.settings.daily_summary_minute:02d} {self.settings.timezone}'
+                )
+            else:
+                logger.info('Daily summary disabled in configuration')
 
             # Connect to Slack
             logger.info('Connecting to Slack via Socket Mode')

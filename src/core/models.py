@@ -8,6 +8,7 @@ from enum import Enum
 class ReminderStatus(Enum):
     """Status of a reminder."""
     PENDING = 'pending'
+    CONFIRMED = 'confirmed'  # User confirmed task completion
     SENT = 'sent'
     CANCELLED = 'cancelled'
     FAILED = 'failed'
@@ -65,6 +66,25 @@ class Reminder:
             Job ID for APScheduler
         """
         return f"reminder_{self.channel_id}_{self.thread_ts}_{self.user_id}"
+    
+    @property
+    def task_description(self) -> str:
+        """Returns task description for summaries.
+        
+        Extracts the first line from original_message, or uses deadline_text
+        if original_message is not available.
+        
+        Returns:
+            Clean task description (1 line)
+        """
+        if self.original_message:
+            # Get first line and remove ETC text
+            first_line = self.original_message.split('\n')[0].strip()
+            # Remove common ETC patterns for cleaner display
+            import re
+            clean = re.sub(r'\s*ETC[:\s]+.*$', '', first_line, flags=re.IGNORECASE)
+            return clean if clean else first_line
+        return self.deadline_text
 
 
 @dataclass

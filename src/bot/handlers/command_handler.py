@@ -1,5 +1,5 @@
 """Command handler for Slack slash commands."""
-from typing import Callable
+from typing import Callable, Optional
 from src.services.reminder_service import ReminderService
 from src.services.notification_service import NotificationService
 from src.utils.logger import get_logger
@@ -18,16 +18,19 @@ class CommandHandler:
     def __init__(
         self,
         reminder_service: ReminderService,
-        notification_service: NotificationService
+        notification_service: NotificationService,
+        etc_summary_service: Optional = None
     ):
         """Initialize command handler.
 
         Args:
             reminder_service: Service for managing reminders
             notification_service: Service for sending Slack messages
+            etc_summary_service: Optional ETC summary service for /etc-summary command
         """
         self.reminder_service = reminder_service
         self.notification_service = notification_service
+        self.etc_summary_service = etc_summary_service
         logger.info('Command handler initialized')
 
     def handle_my_reminders(
