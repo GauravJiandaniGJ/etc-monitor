@@ -93,11 +93,29 @@ class SlackBot:
         slack_client = WebClient(token=settings.slack_bot_token)
         self.notification_service = NotificationService(slack_client)
         
+        # Initialize Gemini Service (needed for both DeadlineService and ETCSummaryService)
+        # We reuse the logic effectively by creating a dedicated service wrapper if needed, 
+        # but here we can just pass the configured AIParser or create a light wrapper depending on implementation.
+        # However, ETCSummaryService expects GeminiService, let's instantiate it.
+        
+        # Import GeminiService here to avoid circular dependencies if any at top level
+        from src.services.ai_service import GeminiService
+        
+        gemini_service = None
+        if settings.is_gemini_configured:
+            gemini_service = GeminiService(
+                api_key=settings.gemini_api_key,
+                model=settings.gemini_model,
+                temperature=settings.gemini_temperature
+            )
+            logger.info('Gemini service initialized for summaries')
+
         # Initialize ETC summary service
         logger.info('Initializing ETC summary service')
         self.etc_summary_service = ETCSummaryService(
             reminder_repo=self.reminder_repo,
-            notification_service=self.notification_service
+            notification_service=self.notification_service,
+            ai_service=gemini_service
         )
 
         # Initialize scheduler

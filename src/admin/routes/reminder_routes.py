@@ -73,9 +73,11 @@ def _get_user_name(user_id: str) -> str:
                 user_id
             )
             _user_cache[user_id] = user_name
+            logger.debug(f"Fetched user name for {user_id}: {user_name}")
             return user_name
         else:
             # API returned error, cache the ID to avoid repeated calls
+            logger.warning(f"Failed to fetch user info for {user_id}: {response.get('error') if response else 'No response'}")
             _user_cache[user_id] = user_id
             return user_id
     except Exception as e:
@@ -107,9 +109,11 @@ def _get_channel_name(channel_id: str) -> str:
                 channel.get('id', channel_id)
             )
             _channel_cache[channel_id] = channel_name
+            logger.debug(f"Fetched channel name for {channel_id}: {channel_name}")
             return channel_name
         else:
             # API returned error, cache the ID to avoid repeated calls
+            logger.warning(f"Failed to fetch channel info for {channel_id}: {response.get('error') if response else 'No response'}")
             _channel_cache[channel_id] = channel_id
             return channel_id
     except Exception as e:
@@ -225,15 +229,19 @@ def list_reminders():
             if channel_id:
                 unique_channel_ids.add(channel_id)
 
+        logger.info(f"Pre-fetching names for {len(unique_user_ids)} users and {len(unique_channel_ids)} channels")
+
         # Pre-fetch names for all unique IDs (this populates cache)
         # This is more efficient than fetching one by one
         for user_id in unique_user_ids:
             if user_id not in _user_cache:
-                _get_user_name(user_id)
+                name = _get_user_name(user_id)
+                logger.debug(f"Cached user {user_id} -> {name}")
 
         for channel_id in unique_channel_ids:
             if channel_id not in _channel_cache:
-                _get_channel_name(channel_id)
+                name = _get_channel_name(channel_id)
+                logger.debug(f"Cached channel {channel_id} -> {name}")
 
         # Now format reminders (cache is populated, so this is fast)
         formatted_reminders = []
@@ -242,13 +250,17 @@ def list_reminders():
                 user_id = row.get('user_id') or ''
                 channel_id = row.get('channel_id') or ''
 
+                # Get names from cache (should be populated now)
+                user_name = _user_cache.get(user_id, user_id) if user_id else None
+                channel_name = _channel_cache.get(channel_id, channel_id) if channel_id else None
+
                 formatted_reminders.append({
                     'id': row.get('id'),
                     'channel_id': channel_id,
-                    'channel_name': _get_channel_name(channel_id) if channel_id else None,
+                    'channel_name': channel_name,
                     'thread_ts': row.get('thread_ts'),
                     'user_id': user_id,
-                    'user_name': _get_user_name(user_id) if user_id else None,
+                    'user_name': user_name,
                     'message_ts': row.get('message_ts'),
                     'deadline_text': row.get('deadline_text'),
                     'deadline_datetime': format_dt(row.get('deadline_datetime')),
@@ -388,10 +400,19 @@ def get_user_reminders(user_id: str):
     """Get all reminders for a specific user."""
     try:
         reminders = _reminder_service.get_user_reminders(user_id)
+        
+        # Pre-fetch user name for this user
+        _get_user_name(user_id)
+        
+        # Format with names
+        formatted = []
+        for reminder in reminders:
+            formatted.append(_format_reminder(reminder))
+            
         return jsonify({
             'user_id': user_id,
-            'count': len(reminders),
-            'reminders': [_format_reminder(r) for r in reminders]
+            'count': len(formatted),
+            'reminders': formatted
         }), 200
     except Exception as e:
         logger.error(f'Error getting reminders for user {user_id}: {e}', exc=e)
@@ -409,11 +430,17 @@ def get_channel_reminders(channel_id: str):
             all_reminders = _reminder_service.reminder_repo.get_pending()
             reminders = [r for r in all_reminders if r.channel_id == channel_id]
 
+        # Pre-fetch channel name
+        _get_channel_name(channel_id)
+        
+        # Format with names
+        formatted = [_format_reminder(r) for r in reminders]
+
         return jsonify({
             'channel_id': channel_id,
             'thread_ts': thread_ts,
-            'count': len(reminders),
-            'reminders': [_format_reminder(r) for r in reminders]
+            'count': len(formatted),
+            'reminders': formatted
         }), 200
     except Exception as e:
         logger.error(f'Error getting reminders for channel {channel_id}: {e}', exc=e)
@@ -437,18 +464,26 @@ def get_audit_log(reminder_id: int):
 
 def _format_reminder(reminder) -> dict:
     """Format reminder for JSON response."""
+    # Get names from cache or fetch them
+    user_id = reminder.user_id if reminder.user_id else ''
+    channel_id = reminder.channel_id if reminder.channel_id else ''
+    
+    # Ensure names are fetched and cached
+    user_name = _user_cache.get(user_id) if user_id in _user_cache else _get_user_name(user_id) if user_id else None
+    channel_name = _channel_cache.get(channel_id) if channel_id in _channel_cache else _get_channel_name(channel_id) if channel_id else None
+    
     return {
         'id': reminder.id,
-        'channel_id': reminder.channel_id,
-        'channel_name': _get_channel_name(reminder.channel_id) if reminder.channel_id else None,
+        'channel_id': channel_id,
+        'channel_name': channel_name,
         'thread_ts': reminder.thread_ts,
-        'user_id': reminder.user_id,
-        'user_name': _get_user_name(reminder.user_id) if reminder.user_id else None,
+        'user_id': user_id,
+        'user_name': user_name,
         'message_ts': reminder.message_ts,
         'deadline_text': reminder.deadline_text,
         'deadline_datetime': reminder.deadline_datetime.isoformat() if reminder.deadline_datetime else None,
         'reminder_datetime': reminder.reminder_datetime.isoformat() if reminder.reminder_datetime else None,
-        'status': reminder.status.value,
+        'status': reminder.status.value if hasattr(reminder.status, 'value') else str(reminder.status),
         'created_at': reminder.created_at.isoformat() if reminder.created_at else None,
         'updated_at': reminder.updated_at.isoformat() if reminder.updated_at else None,
         'sent_at': reminder.sent_at.isoformat() if reminder.sent_at else None,
@@ -463,7 +498,7 @@ def _format_audit_log(audit_log) -> dict:
     return {
         'id': audit_log.id,
         'reminder_id': audit_log.reminder_id,
-        'action': audit_log.action.value,
+        'action': audit_log.action.value if hasattr(audit_log.action, 'value') else str(audit_log.action),
         'field_changed': audit_log.field_changed,
         'old_value': audit_log.old_value,
         'new_value': audit_log.new_value,
@@ -471,3 +506,4 @@ def _format_audit_log(audit_log) -> dict:
         'performed_at': audit_log.performed_at.isoformat() if audit_log.performed_at else None,
         'metadata': audit_log.metadata
     }
+    

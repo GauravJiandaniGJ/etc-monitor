@@ -65,7 +65,7 @@ class Reminder:
         Returns:
             Job ID for APScheduler
         """
-        return f"reminder_{self.channel_id}_{self.thread_ts}_{self.user_id}"
+        return f"reminder_{self.id}" if self.id else f"reminder_{self.channel_id}_{self.thread_ts}_{self.user_id}_{self.message_ts}"
     
     @property
     def task_description(self) -> str:

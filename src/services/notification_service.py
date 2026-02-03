@@ -136,23 +136,26 @@ class NotificationService:
 
             if total_seconds <= 30:
                 reminder_msg = "You'll be reminded in less than a minute."
-            elif total_seconds < 60:
-                seconds = round(total_seconds)
-                sec_text = "second" if seconds == 1 else "seconds"
-                reminder_msg = f"You'll be reminded in {seconds} {sec_text}."
             elif total_seconds < 3600:  # Less than 1 hour
-                # Round to nearest minute for accurate display
                 minutes = round(total_seconds / 60)
-                # Ensure at least 1 minute if there's any time remaining
-                if minutes < 1 and total_seconds > 0:
-                    minutes = 1
-                min_text = "minute" if minutes == 1 else "minutes"
-                reminder_msg = f"You'll be reminded in {minutes} {min_text}."
+                # Handle edge case where round rounds up to 60
+                if minutes == 60:
+                    reminder_msg = "You'll be reminded in 1 hour."
+                else:
+                    min_text = "minute" if minutes == 1 else "minutes"
+                    reminder_msg = f"You'll be reminded in {minutes} {min_text}."
             elif total_seconds < 86400:  # Less than 1 day
-                hours = round(total_seconds / 3600)
-                remaining_seconds = total_seconds % 3600
-                minutes = round(remaining_seconds / 60)
+                # Use divmod for accurate hours/minutes
+                hours, remainder = divmod(round(total_seconds), 3600)
+                minutes = round(remainder / 60)
+                
+                # Handle edge case where minutes round up to 60
+                if minutes == 60:
+                    hours += 1
+                    minutes = 0
+                    
                 hour_text = "hour" if hours == 1 else "hours"
+                
                 if minutes > 0:
                     min_text = "minute" if minutes == 1 else "minutes"
                     reminder_msg = f"You'll be reminded in {hours} {hour_text} and {minutes} {min_text}."
@@ -323,6 +326,67 @@ class NotificationService:
         # Cache the fallback to avoid repeated API calls
         self.channel_cache[channel_id] = channel_id
         return channel_id
+    
+    def get_thread_parent_message(self, channel_id: str, thread_ts: str) -> Optional[str]:
+        """Fetch the parent message text of a thread.
+        
+        Args:
+            channel_id: Slack channel ID
+            thread_ts: Thread timestamp
+            
+        Returns:
+            Text of the parent message or None if fetch fails
+        """
+        try:
+            # conversations_replies returns the thread messages, parent is usually first
+            # We limit to 1 to just get the parent (oldest)
+            response = self.client.conversations_replies(
+                channel=channel_id,
+                ts=thread_ts,
+                limit=1,
+                inclusive=True
+            )
+            
+            if response['ok'] and response['messages']:
+                return response['messages'][0].get('text')
+            
+            return None
+            
+        except SlackApiError as e:
+            logger.warning(f'Error fetching thread parent message: {e}')
+            return None
+        except Exception as e:
+            logger.error(f'Unexpected error fetching thread parent: {e}')
+            return None
+
+    def get_message_permalink(self, channel_id: str, message_ts: str) -> Optional[str]:
+        """Get permalink for a message.
+        
+        Args:
+            channel_id: Slack channel ID
+            message_ts: Message timestamp
+            
+        Returns:
+            Permalink URL or None if fetch fails
+        """
+        try:
+            response = self.client.chat_getPermalink(
+                channel=channel_id,
+                message_ts=message_ts
+            )
+            
+            if response['ok']:
+                return response['permalink']
+            
+            return None
+            
+        except SlackApiError as e:
+            logger.warning(f'Error fetching permalink: {e}')
+            return None
+        except Exception as e:
+            logger.error(f'Unexpected error fetching permalink: {e}')
+            return None
+
     
     def send_dm(self, user_id: str, message: str) -> bool:
         """Send a direct message to a user.

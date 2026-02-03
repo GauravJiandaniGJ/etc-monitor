@@ -263,3 +263,46 @@ class CommandHandler:
         except Exception as e:
             logger.error(f'Error handling /list-thread-reminders: {e}', exc=e)
             respond("Error: Failed to retrieve thread reminders. Please try again later.")
+
+    def handle_etc_summary(
+        self,
+        ack: Callable,
+        respond: Callable,
+        command: dict
+    ) -> None:
+        """Handle /etc-summary command.
+        
+        Manually triggers an ETC summary for the user.
+        
+        Args:
+            ack: Slack ack function to acknowledge the command
+            respond: Slack respond function to send response
+            command: Command dictionary from Slack
+        """
+        try:
+            # Acknowledge the command
+            ack()
+            
+            user_id = command.get('user_id')
+            if not user_id:
+                respond("Error: Could not identify user")
+                return
+                
+            logger.info(f'Handling /etc-summary command from user {user_id}')
+            
+            if not self.etc_summary_service:
+                respond("Error: ETC summary service not initialized.")
+                return
+                
+            # Trigger summary generation
+            # This sends a DM directly, so we just acknowledge here
+            success = self.etc_summary_service.send_summary_to_user(user_id)
+            
+            if success:
+                respond("✅ Generating your ETC summary... Check your DMs!")
+            else:
+                respond("You don't have any pending ETC tasks to summarize.")
+                
+        except Exception as e:
+            logger.error(f'Error handling /etc-summary: {e}', exc=e)
+            respond("Error: Failed to generate summary. Please try again later.")

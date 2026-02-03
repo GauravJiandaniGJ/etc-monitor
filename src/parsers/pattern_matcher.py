@@ -46,11 +46,12 @@ class PatternMatcher:
             r".*?(monday|tuesday|wednesday|thursday|friday|saturday|sunday)",
 
             # Advanced professional expressions
-            r"(schedule|set|create|add|make)\s+(meeting|call|task|reminder|etc|deadline)\s+(for|in|at|on)\s+(.+)$",
-            r"(need|want|require|must)\s+(meeting|call|task|reminder|etc|deadline)\s+(for|in|at|on)\s+(.+)$",
+            # Advanced professional expressions - REMOVED generic "add etc" patterns to avoid false positives
+            r"(schedule|set|create|add|make)\s+(meeting|call|task|reminder|deadline)\s+(for|in|at|on)\s+(.+)$",
+            r"(need|want|require|must)\s+(meeting|call|task|reminder|deadline)\s+(for|in|at|on)\s+(.+)$",
             r"(remind|notify|alert)\s+(me|us)\s+(for|in|at|on)\s+(.+)$",
             r"(follow\s+up|followup|follow-up)\s+(meeting|call|task|reminder)\s+(for|in|at|on)\s+(.+)$",
-            r"(book|arrange|organize)\s+(meeting|call|task|reminder|etc|deadline)\s+(for|in|at|on)\s+(.+)$",
+            r"(book|arrange|organize)\s+(meeting|call|task|reminder|deadline)\s+(for|in|at|on)\s+(.+)$",
 
             # Specific date with time patterns (most specific first)
             r"(\d{1,2}(?:st|nd|rd|th)?\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\s+\d{4}\s+\d{1,2}(?::\d{2})?\s*(?:am|pm|AM|PM))",
@@ -247,7 +248,9 @@ class PatternMatcher:
                 if re.search(indicator, text, re.IGNORECASE):
                     return True
 
-        return has_etc_keyword or has_natural_etc
+        # STRICT MODE: If we found "ETC" but NO time indicator, return False.
+        # This prevents questions like "What is the ETC?" from triggering reminders.
+        return False
 
     def extract_deadline_text(self, text: str) -> Optional[str]:
         """Extract deadline text from message.

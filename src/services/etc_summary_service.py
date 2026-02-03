@@ -4,6 +4,7 @@ from typing import List, Dict, Optional
 from src.core.models import Reminder, ReminderStatus
 from src.database.repositories.reminder_repository import ReminderRepository
 from src.services.notification_service import NotificationService
+from src.services.ai_service import GeminiService
 from src.utils.logger import get_logger
 from src.utils.timezone import now_ist, to_ist
 
@@ -25,128 +26,140 @@ class ETCSummaryService:
     def __init__(
         self,
         reminder_repo: ReminderRepository,
-        notification_service: NotificationService
+        notification_service: NotificationService,
+        ai_service: Optional[GeminiService] = None
     ):
         """Initialize ETC summary service.
         
         Args:
             reminder_repo: Reminder repository instance
             notification_service: Notification service for sending messages
+            ai_service: Optional AI service for task summarization
         """
         self.reminder_repo = reminder_repo
         self.notification_service = notification_service
+        self.ai_service = ai_service
         logger.info('ETC Summary service initialized')
     
     def get_user_summary(
         self,
-        user_id: str,
-        reference_date: Optional[date] = None
-    ) -> Dict[str, List[Reminder]]:
-        """Get ETC summary for a specific user.
+        user_id: str
+    ) -> List[Dict]:
+        """Get ETC summary for a specific user with AI-enhanced details.
         
         Args:
             user_id: Slack user ID
-            reference_date: Date to use as "today" (defaults to current date)
             
         Returns:
-            Dictionary with keys: 'yesterday', 'today', 'tomorrow'
-            Each contains list of Reminder objects
+            List of dictionaries containing reminder details and AI summary
         """
-        if reference_date is None:
-            reference_date = now_ist().date()
+        logger.info(f'Generating summary for user {user_id}')
         
-        logger.info(f'Generating summary for user {user_id} (reference: {reference_date})')
-        
-        # Get all user reminders
+        # Get all active reminders for the user
         all_reminders = self.reminder_repo.get_by_user(user_id)
         
-        # Filter out cancelled and confirmed reminders
-        exclude_statuses = [ReminderStatus.CANCELLED, ReminderStatus.CONFIRMED]
+        # Filter for PENDING or RESCHEDULED status
+        active_statuses = [ReminderStatus.PENDING, ReminderStatus.RESCHEDULED]
         active_reminders = [
             r for r in all_reminders 
-            if r.status not in exclude_statuses
+            if r.status in active_statuses
         ]
+        
+        # Sort by deadline
+        active_reminders.sort(key=lambda x: x.deadline_datetime)
         
         logger.debug(f'Found {len(active_reminders)} active reminders for user {user_id}')
         
-        # Group by date
-        yesterday = reference_date - timedelta(days=1)
-        tomorrow = reference_date + timedelta(days=1)
-        
-        summary = {
-            'yesterday': [],
-            'today': [],
-            'tomorrow': []
-        }
+        enhanced_summary = []
         
         for reminder in active_reminders:
-            # Convert deadline to IST date
-            deadline_date = to_ist(reminder.deadline_datetime).date()
+            # Basic info
+            item = {
+                'reminder': reminder,
+                'summary_text': reminder.task_description or "Unknown Task",
+                'thread_link': None
+            }
             
-            if deadline_date == yesterday:
-                summary['yesterday'].append(reminder)
-            elif deadline_date == reference_date:
-                summary['today'].append(reminder)
-            elif deadline_date == tomorrow:
-                summary['tomorrow'].append(reminder)
-        
-        logger.info(
-            f'Summary for {user_id}: '
-            f'{len(summary["yesterday"])} yesterday, '
-            f'{len(summary["today"])} today, '
-            f'{len(summary["tomorrow"])} tomorrow'
-        )
-        
-        return summary
+            # Fetch thread context and link
+            if reminder.channel_id and reminder.thread_ts:
+                # Get permalink
+                permalink = self.notification_service.get_message_permalink(
+                    reminder.channel_id, 
+                    reminder.thread_ts
+                )
+                item['thread_link'] = permalink
+                
+                # AI Summarization Logic
+                if self.ai_service and self.ai_service.is_configured():
+                    try:
+                        # Fetch parent message
+                        parent_text = self.notification_service.get_thread_parent_message(
+                            reminder.channel_id,
+                            reminder.thread_ts
+                        )
+                        
+                        if parent_text:
+                            # Generate AI summary
+                            prompt = (
+                                f"Original Task Context: {parent_text}\n"
+                                f"User Status Update: {reminder.deadline_text or 'ETC provided'}\n"
+                                f"Summarize this into a single, short, clear task description (max 10 words). "
+                                f"Example output: 'Deploying backend to staging'"
+                            )
+                            
+                            ai_summary = self.ai_service.generate(prompt, max_tokens=50, temperature=0.3)
+                            
+                            if ai_summary:
+                                item['summary_text'] = ai_summary.strip()
+                                logger.debug(f'Generated AI summary for reminder {reminder.id}: {item["summary_text"]}')
+                    except Exception as e:
+                        logger.warning(f'Failed to generate AI summary for reminder {reminder.id}: {e}')
+            
+            enhanced_summary.append(item)
+            
+        return enhanced_summary
     
     def format_summary_message(
         self,
-        summary: Dict[str, List[Reminder]],
+        summary_list: List[Dict],
         user_id: str
     ) -> Optional[str]:
         """Format summary data into a Slack message.
         
         Args:
-            summary: Summary dictionary from get_user_summary()
+            summary_list: List of summary items from get_user_summary()
             user_id: User ID for personalization
             
         Returns:
             Formatted Slack message string, or None if no tasks
         """
-        # Check if there are any tasks
-        total_tasks = (
-            len(summary['yesterday']) +
-            len(summary['today']) +
-            len(summary['tomorrow'])
-        )
-        
-        if total_tasks == 0:
+        if not summary_list:
             logger.debug(f'No tasks for user {user_id}, skipping summary')
             return None
         
         # Build message
         lines = ['📝 *Your ETC Summary*\n']
+        lines.append('*Pending Tasks:*')
         
-        # Yesterday's ETCs (missed/overdue)
-        if summary['yesterday']:
-            lines.append('*Yesterday\'s ETCs (Missed):*')
-            for i, reminder in enumerate(summary['yesterday'], 1):
-                lines.append(f'{i}. {reminder.task_description}')
-            lines.append('')  # Empty line
-        
-        # Today's ETCs
-        if summary['today']:
-            lines.append('*Today\'s ETCs:*')
-            for i, reminder in enumerate(summary['today'], 1):
-                lines.append(f'{i}. {reminder.task_description}')
-            lines.append('')  # Empty line
-        
-        # Tomorrow's ETCs
-        if summary['tomorrow']:
-            lines.append('*Tomorrow\'s ETCs:*')
-            for i, reminder in enumerate(summary['tomorrow'], 1):
-                lines.append(f'{i}. {reminder.task_description}')
-            lines.append('')  # Empty line
+        for i, item in enumerate(summary_list, 1):
+            reminder = item['reminder']
+            text = item['summary_text']
+            link = item['thread_link']
+            
+            # Format: 1. Task Description <link|View> - ETC: 5 mins
+            if link:
+                line = f"{i}. {text} <{link}|View Thread>"
+            else:
+                line = f"{i}. {text}"
+            
+            # Add simple ETC info if relevant
+            # deadline_str = format_datetime_friendly(reminder.deadline_datetime)
+            # line += f" (Due: {deadline_str})" 
+            
+            lines.append(line)
+            
+        lines.append('')
+        lines.append('_This summary is AI-generated based on your task context._')
         
         message = '\n'.join(lines).strip()
         logger.debug(f'Formatted summary message for {user_id}')

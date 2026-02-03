@@ -56,6 +56,9 @@ def create_app(settings: Optional[Settings] = None) -> Flask:
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>ETC Monitor • Admin</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <!-- DataTables CSS -->
+    <link rel="stylesheet" href="https://cdn.datatables.net/1.13.7/css/jquery.dataTables.min.css">
+    <link rel="stylesheet" href="https://cdn.datatables.net/responsive/2.5.0/css/responsive.dataTables.min.css">
     <style>
         :root {
             --primary: #2563eb;
@@ -246,12 +249,48 @@ def create_app(settings: Optional[Settings] = None) -> Flask:
             color: var(--text-primary);
             box-shadow: var(--shadow-sm);
         }
-        .table-container { overflow-x: auto; }
-        .data-table {
-            width: 100%;
-            border-collapse: collapse;
+        .table-container { overflow-x: auto; padding: 1rem; }
+        
+        /* DataTables Custom Styling */
+        .dataTables_wrapper {
+            color: var(--text-primary);
         }
-        .data-table th {
+        .dataTables_length, .dataTables_filter, .dataTables_info, .dataTables_paginate {
+            margin-bottom: 1rem;
+            color: var(--text-secondary);
+        }
+        .dataTables_length select, .dataTables_filter input {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            color: var(--text-primary);
+            padding: 0.5rem;
+            border-radius: 6px;
+            margin-left: 0.5rem;
+        }
+        .dataTables_wrapper .dataTables_paginate .paginate_button {
+            padding: 0.5rem 1rem;
+            margin: 0 2px;
+            border: 1px solid var(--border);
+            background: var(--surface);
+            color: var(--text-primary) !important;
+            border-radius: 6px;
+        }
+        .dataTables_wrapper .dataTables_paginate .paginate_button.current,
+        .dataTables_wrapper .dataTables_paginate .paginate_button:hover {
+            background: var(--primary) !important;
+            color: white !important;
+            border-color: var(--primary);
+        }
+        .dataTables_wrapper .dataTables_paginate .paginate_button.disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        table.dataTable {
+            width: 100% !important;
+            border-collapse: collapse;
+            background: var(--surface);
+        }
+        table.dataTable thead th {
             padding: 1rem 1.5rem;
             text-align: left;
             font-weight: 600;
@@ -261,13 +300,15 @@ def create_app(settings: Optional[Settings] = None) -> Flask:
             border-bottom: 1px solid var(--border);
             white-space: nowrap;
         }
-        .data-table td {
+        table.dataTable tbody td {
             padding: 1rem 1.5rem;
             border-bottom: 1px solid var(--border);
             vertical-align: middle;
+            color: var(--text-primary);
         }
-        .data-table tbody tr { }
-        .data-table tbody tr:last-child td { border-bottom: none; }
+        table.dataTable tbody tr:hover {
+            background: var(--surface-secondary);
+        }
         .user-badge {
             display: inline-flex;
             align-items: center;
@@ -307,16 +348,17 @@ def create_app(settings: Optional[Settings] = None) -> Flask:
         .status-badge.cancelled { background: rgba(239, 68, 68, 0.1); color: var(--danger); }
         .status-badge.failed { background: rgba(239, 68, 68, 0.1); color: var(--danger); }
         .status-badge.rescheduled { background: rgba(59, 130, 246, 0.1); color: var(--primary); }
-        .status-dot {
+        .status-dot-table {
             width: 6px;
             height: 6px;
             border-radius: 50%;
+            display: inline-block;
         }
-        .status-dot.pending { background: var(--warning); }
-        .status-dot.sent { background: var(--success); }
-        .status-dot.cancelled { background: var(--danger); }
-        .status-dot.failed { background: var(--danger); }
-        .status-dot.rescheduled { background: var(--primary); }
+        .status-dot-table.pending { background: var(--warning); }
+        .status-dot-table.sent { background: var(--success); }
+        .status-dot-table.cancelled { background: var(--danger); }
+        .status-dot-table.failed { background: var(--danger); }
+        .status-dot-table.rescheduled { background: var(--primary); }
         .time-stamp {
             color: var(--text-muted);
             font-size: 0.875rem;
@@ -373,17 +415,17 @@ def create_app(settings: Optional[Settings] = None) -> Flask:
             color: var(--text-secondary);
             margin-bottom: 0.5rem;
         }
-        .loading {
-            text-align: center;
-            padding: 40px;
-            color: var(--text-muted);
-        }
         .error {
             background: var(--error-bg);
             color: var(--error-text);
             padding: 1rem;
             border-radius: 8px;
             margin: 1rem;
+        }
+        .dt-loading {
+            text-align: center;
+            padding: 2rem;
+            color: var(--text-muted);
         }
     </style>
 </head>
@@ -471,11 +513,11 @@ def create_app(settings: Optional[Settings] = None) -> Flask:
 
                 <div class="table-container">
                     <div id="all-tab">
-                        <div id="loading" class="loading">Loading reminders...</div>
                         <div id="error" class="error" style="display:none;"></div>
-                        <table class="data-table" id="remindersTable" style="display:none;">
+                        <table class="display responsive nowrap" id="remindersTable" style="width:100%">
                             <thead>
                                 <tr>
+                                    <th>ID</th>
                                     <th>User</th>
                                     <th>Channel</th>
                                     <th>Message</th>
@@ -486,15 +528,15 @@ def create_app(settings: Optional[Settings] = None) -> Flask:
                                     <th>Actions</th>
                                 </tr>
                             </thead>
-                            <tbody id="remindersBody">
+                            <tbody>
                             </tbody>
                         </table>
                     </div>
                     <div id="pending-tab" style="display:none;">
-                        <div id="loading-pending" class="loading">Loading pending reminders...</div>
-                        <table class="data-table" id="pendingTable" style="display:none;">
+                        <table class="display responsive nowrap" id="pendingTable" style="width:100%">
                             <thead>
                                 <tr>
+                                    <th>ID</th>
                                     <th>User</th>
                                     <th>Channel</th>
                                     <th>Message</th>
@@ -504,7 +546,7 @@ def create_app(settings: Optional[Settings] = None) -> Flask:
                                     <th>Actions</th>
                                 </tr>
                             </thead>
-                            <tbody id="pendingBody">
+                            <tbody>
                             </tbody>
                         </table>
                     </div>
@@ -513,8 +555,13 @@ def create_app(settings: Optional[Settings] = None) -> Flask:
         </main>
     </div>
 
+    <!-- jQuery and DataTables -->
+    <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+    <script src="https://cdn.datatables.net/1.13.7/js/jquery.dataTables.min.js"></script>
+    <script src="https://cdn.datatables.net/responsive/2.5.0/js/dataTables.responsive.min.js"></script>
+    
     <script>
-        let allReminders = [];
+        let allTable, pendingTable;
         let currentTab = 'all';
 
         function getSystemTheme() {
@@ -543,11 +590,16 @@ def create_app(settings: Optional[Settings] = None) -> Flask:
             document.getElementById('pending-tab').style.display = tabName === 'pending' ? 'block' : 'none';
             document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
             event.target.classList.add('active');
-            if (tabName === 'pending') {
-                loadPendingReminders();
-            } else {
-                loadReminders();
+            
+            if (tabName === 'pending' && !pendingTable) {
+                initPendingTable();
             }
+            
+            // Adjust columns on tab switch
+            setTimeout(() => {
+                if (tabName === 'all' && allTable) allTable.columns.adjust();
+                if (tabName === 'pending' && pendingTable) pendingTable.columns.adjust();
+            }, 10);
         }
 
         function formatDate(dateStr) {
@@ -562,7 +614,6 @@ def create_app(settings: Optional[Settings] = None) -> Flask:
         }
 
         function getUserInitial(userId, userName) {
-            // Use first letter of name if available, otherwise use first letter of ID
             if (userName && userName !== '-' && userName !== userId) {
                 return userName.charAt(0).toUpperCase();
             }
@@ -584,154 +635,186 @@ def create_app(settings: Optional[Settings] = None) -> Flask:
 
         function formatChannelName(reminder) {
             let channelName = reminder.channel_name || reminder.channel_id || '-';
-            // Remove # if already present, we'll add it in display
             if (channelName.startsWith('#')) {
                 channelName = channelName.substring(1);
             }
             return channelName;
         }
 
-        function createReminderRow(reminder) {
-            const row = document.createElement('tr');
-            const status = reminder.status || 'pending';
-            const statusClass = status.toLowerCase();
-
-            const messageText = reminder.deadline_text || '-';
-            const escapedMessage = messageText.replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;');
-            const userName = formatUserName(reminder);
-            const channelName = formatChannelName(reminder);
-            row.innerHTML = `
-                <td>
-                    <div class="user-badge">
-                        <div class="user-avatar">${getUserInitial(reminder.user_id, reminder.user_name)}</div>
-                        <span>${userName}</span>
-                    </div>
-                </td>
-                <td><span>#${channelName}</span></td>
-                <td><div class="message-preview" title="${escapedMessage}">${escapedMessage.substring(0, 40)}${messageText.length > 40 ? '...' : ''}</div></td>
-                <td><span class="time-stamp">${formatDate(reminder.deadline_datetime)}</span></td>
-                <td><span class="time-stamp">${formatDate(reminder.reminder_datetime)}</span></td>
-                <td>
-                    <span class="status-badge ${statusClass}">
-                        <span class="status-dot ${statusClass}"></span>
-                        ${status}
-                    </span>
-                </td>
-                <td><span class="time-stamp">${formatDate(reminder.created_at)}</span></td>
-                <td>
-                    <div class="action-buttons">
-                        ${status === 'pending' ? `<button class="btn btn-warning" onclick="cancelReminder(${reminder.id})">Cancel</button>` : ''}
-                    </div>
-                </td>
-            `;
-            return row;
+        function escapeHtml(text) {
+            if (!text) return '';
+            return text
+                .replace(/&/g, "&amp;")
+                .replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;")
+                .replace(/"/g, "&quot;")
+                .replace(/'/g, "&#039;");
         }
 
-        function loadReminders() {
-            document.getElementById('loading').style.display = 'block';
-            document.getElementById('error').style.display = 'none';
-            document.getElementById('remindersTable').style.display = 'none';
+        function renderUser(data, type, row) {
+            const userName = formatUserName(row);
+            const initial = getUserInitial(row.user_id, row.user_name);
+            return `<div class="user-badge">
+                <div class="user-avatar">${initial}</div>
+                <span>${escapeHtml(userName)}</span>
+            </div>`;
+        }
 
-            fetch('/api/reminders?limit=500')
-            .then(response => {
-                if (!response.ok) {
-                    return response.json().then(err => {
-                        throw new Error(err.error || 'Failed to load reminders');
-                    }).catch(() => {
-                        throw new Error('Failed to load reminders (HTTP ' + response.status + ')');
+        function renderChannel(data, type, row) {
+            const channelName = formatChannelName(row);
+            return `<span>#${escapeHtml(channelName)}</span>`;
+        }
+
+        function renderMessage(data, type, row) {
+            const messageText = row.deadline_text || '-';
+            const escaped = escapeHtml(messageText);
+            return `<div class="message-preview" title="${escaped}">${escaped.substring(0, 40)}${messageText.length > 40 ? '...' : ''}</div>`;
+        }
+
+        function renderDate(dateStr) {
+            return `<span class="time-stamp">${formatDate(dateStr)}</span>`;
+        }
+
+        function renderStatus(data, type, row) {
+            const status = (row.status || 'pending').toLowerCase();
+            return `<span class="status-badge ${status}">
+                <span class="status-dot-table ${status}"></span>
+                ${status}
+            </span>`;
+        }
+
+        function renderActions(data, type, row) {
+            const status = (row.status || 'pending').toLowerCase();
+            if (status === 'pending') {
+                return `<div class="action-buttons">
+                    <button class="btn btn-warning" onclick="cancelReminder(${row.id})">Cancel</button>
+                </div>`;
+            }
+            return '';
+        }
+
+        function updateStatsFromPageInfo(info) {
+            // Update stats from the current page info if available
+            // For more accurate stats, we could make a separate API call
+            if (info && info.recordsTotal !== undefined) {
+                // This is a simplified update - ideally fetch stats from a dedicated endpoint
+                fetch('/api/reminders?limit=1')
+                    .then(r => r.json())
+                    .then(data => {
+                        if (data.stats) {
+                            document.getElementById('total').textContent = data.total || 0;
+                            document.getElementById('pending').textContent = data.stats.pending || 0;
+                            document.getElementById('sent').textContent = data.stats.sent || 0;
+                            document.getElementById('cancelled').textContent = (data.stats.cancelled || 0) + (data.stats.failed || 0);
+                        }
+                    })
+                    .catch(() => {
+                        // Fallback: use DataTables info
+                        document.getElementById('total').textContent = info.recordsTotal || 0;
                     });
+            }
+        }
+
+        function initAllTable() {
+            allTable = $('#remindersTable').DataTable({
+                processing: true,
+                serverSide: false, // Set to true if you implement server-side processing
+                ajax: {
+                    url: '/api/reminders?limit=500',
+                    dataSrc: function(json) {
+                        updateStats(json);
+                        return json.reminders || [];
+                    },
+                    error: function(xhr, error, thrown) {
+                        $('#error').text('Error loading reminders: ' + (thrown || error)).show();
+                    }
+                },
+                columns: [
+                    { data: 'id', visible: false }, // Hidden ID column
+                    { data: 'user_id', render: renderUser, orderable: false },
+                    { data: 'channel_id', render: renderChannel, orderable: false },
+                    { data: 'deadline_text', render: renderMessage, orderable: false },
+                    { data: 'deadline_datetime', render: function(d) { return renderDate(d); } },
+                    { data: 'reminder_datetime', render: function(d) { return renderDate(d); } },
+                    { data: 'status', render: renderStatus },
+                    { data: 'created_at', render: function(d) { return renderDate(d); } },
+                    { data: null, render: renderActions, orderable: false, searchable: false }
+                ],
+                pageLength: 25,
+                lengthMenu: [[10, 25, 50, 100, 500], [10, 25, 50, 100, 500]],
+                responsive: true,
+                order: [[7, 'desc']], // Sort by created_at desc
+                language: {
+                    emptyTable: "No reminders found",
+                    zeroRecords: "No matching reminders found",
+                    info: "Showing _START_ to _END_ of _TOTAL_ reminders",
+                    infoEmpty: "No reminders available",
+                    infoFiltered: "(filtered from _MAX_ total records)",
+                    search: "Search:",
+                    paginate: {
+                        first: "First",
+                        last: "Last",
+                        next: "Next",
+                        previous: "Previous"
+                    }
+                },
+                initComplete: function() {
+                    updateStatsFromPageInfo(this.api().page.info());
                 }
-                return response.json();
-            })
-            .then(data => {
-                document.getElementById('loading').style.display = 'none';
-                document.getElementById('remindersTable').style.display = 'table';
-
-                const tbody = document.getElementById('remindersBody');
-                tbody.innerHTML = '';
-
-                if (!data.reminders || data.reminders.length === 0) {
-                    tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;padding:40px;color:var(--text-muted);">No reminders found</td></tr>';
-                    updateStats({total: 0, pending: 0, sent: 0, cancelled: 0});
-                    return;
-                }
-
-                allReminders = data.reminders;
-                data.reminders.forEach(reminder => {
-                    tbody.appendChild(createReminderRow(reminder));
-                });
-
-                updateStats(data);
-            })
-            .catch(error => {
-                document.getElementById('loading').style.display = 'none';
-                document.getElementById('error').style.display = 'block';
-                document.getElementById('error').textContent = 'Error: ' + error.message;
             });
         }
 
-        function loadPendingReminders() {
-            document.getElementById('loading-pending').style.display = 'block';
-            document.getElementById('pendingTable').style.display = 'none';
-
-            fetch('/api/reminders?status=pending&limit=500')
-            .then(response => response.json())
-            .then(data => {
-                document.getElementById('loading-pending').style.display = 'none';
-                document.getElementById('pendingTable').style.display = 'table';
-
-                const tbody = document.getElementById('pendingBody');
-                tbody.innerHTML = '';
-
-                if (!data.reminders || data.reminders.length === 0) {
-                    tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;padding:40px;color:var(--text-muted);">No pending reminders</td></tr>';
-                    return;
+        function initPendingTable() {
+            pendingTable = $('#pendingTable').DataTable({
+                processing: true,
+                serverSide: false,
+                ajax: {
+                    url: '/api/reminders?status=pending&limit=500',
+                    dataSrc: function(json) {
+                        return json.reminders || [];
+                    },
+                    error: function(xhr, error, thrown) {
+                        console.error('Error loading pending reminders:', thrown);
+                    }
+                },
+                columns: [
+                    { data: 'id', visible: false },
+                    { data: 'user_id', render: renderUser, orderable: false },
+                    { data: 'channel_id', render: renderChannel, orderable: false },
+                    { data: 'deadline_text', render: renderMessage, orderable: false },
+                    { data: 'deadline_datetime', render: function(d) { return renderDate(d); } },
+                    { data: 'reminder_datetime', render: function(d) { return renderDate(d); } },
+                    { data: 'created_at', render: function(d) { return renderDate(d); } },
+                    { data: null, render: renderActions, orderable: false, searchable: false }
+                ],
+                pageLength: 25,
+                lengthMenu: [[10, 25, 50, 100], [10, 25, 50, 100]],
+                responsive: true,
+                order: [[6, 'desc']],
+                language: {
+                    emptyTable: "No pending reminders",
+                    zeroRecords: "No matching pending reminders",
+                    info: "Showing _START_ to _END_ of _TOTAL_ pending",
+                    infoEmpty: "No pending reminders",
+                    infoFiltered: "(filtered from _MAX_ total records)",
+                    search: "Search:",
+                    paginate: {
+                        first: "First",
+                        last: "Last",
+                        next: "Next",
+                        previous: "Previous"
+                    }
                 }
-
-                data.reminders.forEach(reminder => {
-                    const row = document.createElement('tr');
-                    const messageText = reminder.deadline_text || '-';
-                    const escapedMessage = messageText.replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;');
-                    const userName = formatUserName(reminder);
-                    const channelName = formatChannelName(reminder);
-                    row.innerHTML = `
-                        <td>
-                            <div class="user-badge">
-                                <div class="user-avatar">${getUserInitial(reminder.user_id, reminder.user_name)}</div>
-                                <span>${userName}</span>
-                            </div>
-                        </td>
-                        <td><span>#${channelName}</span></td>
-                        <td><div class="message-preview" title="${escapedMessage}">${escapedMessage.substring(0, 40)}${messageText.length > 40 ? '...' : ''}</div></td>
-                        <td><span class="time-stamp">${formatDate(reminder.deadline_datetime)}</span></td>
-                        <td><span class="time-stamp">${formatDate(reminder.reminder_datetime)}</span></td>
-                        <td><span class="time-stamp">${formatDate(reminder.created_at)}</span></td>
-                        <td>
-                            <div class="action-buttons">
-                                <button class="btn btn-warning" onclick="cancelReminder(${reminder.id})">Cancel</button>
-                            </div>
-                        </td>
-                    `;
-                    tbody.appendChild(row);
-                });
-            })
-            .catch(error => {
-                document.getElementById('loading-pending').style.display = 'none';
-                console.error('Error loading pending reminders:', error);
             });
         }
 
         function updateStats(data) {
-            // Use API stats if available (accurate counts from database)
-            // Otherwise fall back to counting returned reminders
             if (data.stats) {
-                // Use accurate stats from API
                 document.getElementById('total').textContent = data.total || 0;
                 document.getElementById('pending').textContent = data.stats.pending || 0;
                 document.getElementById('sent').textContent = data.stats.sent || 0;
                 document.getElementById('cancelled').textContent = (data.stats.cancelled || 0) + (data.stats.failed || 0);
             } else {
-                // Fallback: count from returned reminders (less accurate with pagination)
                 const reminders = data.reminders || [];
                 const stats = {
                     total: data.total !== undefined ? data.total : reminders.length,
@@ -763,10 +846,11 @@ def create_app(settings: Optional[Settings] = None) -> Flask:
             })
             .then(data => {
                 alert('Reminder cancelled successfully');
-                if (currentTab === 'pending') {
-                    loadPendingReminders();
-                } else {
-                    loadReminders();
+                // Reload the appropriate table
+                if (currentTab === 'all' && allTable) {
+                    allTable.ajax.reload();
+                } else if (currentTab === 'pending' && pendingTable) {
+                    pendingTable.ajax.reload();
                 }
             })
             .catch(error => {
@@ -774,17 +858,25 @@ def create_app(settings: Optional[Settings] = None) -> Flask:
             });
         }
 
+        function refreshData() {
+            if (currentTab === 'all' && allTable) {
+                allTable.ajax.reload(null, false); // false = keep current page
+            } else if (currentTab === 'pending' && pendingTable) {
+                pendingTable.ajax.reload(null, false);
+            }
+        }
+
         // Initialize theme
         const storedTheme = localStorage.getItem('theme') || getSystemTheme();
         setTheme(storedTheme);
 
-        // Load on page load
-        loadReminders();
-        // Auto-refresh every 10 seconds for better responsiveness
-        setInterval(() => {
-            if (currentTab === 'all') loadReminders();
-            else loadPendingReminders();
-        }, 10000);
+        // Initialize DataTables on page load
+        $(document).ready(function() {
+            initAllTable();
+            
+            // Optional: Auto-refresh every 30 seconds (less aggressive than 10s)
+            setInterval(refreshData, 30000);
+        });
     </script>
 </body>
 </html>
