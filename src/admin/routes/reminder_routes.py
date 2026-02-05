@@ -1,6 +1,7 @@
 """Reminder management routes for admin panel - FAST VERSION (No Hanging)."""
 from flask import Blueprint, jsonify, request
-from typing import Optional
+from concurrent.futures import ThreadPoolExecutor
+from typing import Dict, Set, Optional
 from functools import wraps
 import time
 from datetime import datetime
@@ -28,6 +29,8 @@ _slack_client: Optional[WebClient] = None
 # Cache for user and channel names to avoid repeated API calls
 _user_cache: dict = {}
 _channel_cache: dict = {}
+# Thread pool for concurrent API calls
+_slack_executor = ThreadPoolExecutor(max_workers=10)
 
 
 def init_reminder_routes(settings: Settings):
@@ -119,8 +122,219 @@ def _get_channel_name(channel_id: str) -> str:
         return channel_id
 
 
+def _format_dt(dt_val):
+    """Format datetime for JSON."""
+    if not dt_val:
+        return None
+    if isinstance(dt_val, str):
+        return dt_val
+    try:
+        return dt_val.isoformat()
+    except:
+        return str(dt_val)
+
+
+def _batch_get_user_names(user_ids: Set[str]) -> Dict[str, str]:
+    """Fetch user names in batch with caching."""
+    if not _slack_client or not user_ids:
+        return {uid: uid for uid in user_ids}
+    
+    result = {}
+    to_fetch = [uid for uid in user_ids if uid not in _user_cache]
+    result.update({uid: _user_cache[uid] for uid in user_ids if uid in _user_cache})
+    
+    if not to_fetch:
+        return result
+    
+    def fetch_one(uid: str):
+        try:
+            resp = _slack_client.users_info(user=uid, timeout=5)
+            if resp and resp.get('ok'):
+                u = resp['user']
+                name = u.get('real_name') or u.get('profile', {}).get('display_name') or uid
+                return (uid, name)
+        except Exception as e:
+            logger.warning(f'User fetch failed {uid}: {e}')
+        return (uid, uid)
+    
+    try:
+        from concurrent.futures import as_completed
+        futures = {_slack_executor.submit(fetch_one, uid): uid for uid in to_fetch}
+        for future in as_completed(futures, timeout=10):
+            try:
+                uid, name = future.result(timeout=5)
+                _user_cache[uid] = name
+                result[uid] = name
+            except Exception as e:
+                uid = futures[future]
+                result[uid] = uid
+    except Exception as e:
+        logger.warning(f'Batch user fetch failed: {e}')
+        for uid in to_fetch:
+            if uid not in result:
+                result[uid] = uid
+    
+    return result
+
+
+def _batch_get_channel_names(channel_ids: Set[str]) -> Dict[str, str]:
+    """Fetch channel names in batch with caching."""
+    if not _slack_client or not channel_ids:
+        return {cid: cid for cid in channel_ids}
+    
+    result = {}
+    to_fetch = [cid for cid in channel_ids if cid not in _channel_cache]
+    result.update({cid: _channel_cache[cid] for cid in channel_ids if cid in _channel_cache})
+    
+    if not to_fetch:
+        return result
+    
+    def fetch_one(cid: str):
+        try:
+            resp = _slack_client.conversations_info(channel=cid, timeout=5)
+            if resp and resp.get('ok'):
+                name = resp['channel'].get('name') or cid
+                return (cid, name)
+        except Exception as e:
+            logger.warning(f'Channel fetch failed {cid}: {e}')
+        return (cid, cid)
+    
+    try:
+        from concurrent.futures import as_completed
+        futures = {_slack_executor.submit(fetch_one, cid): cid for cid in to_fetch}
+        for future in as_completed(futures, timeout=10):
+            try:
+                cid, name = future.result(timeout=5)
+                _channel_cache[cid] = name
+                result[cid] = name
+            except Exception as e:
+                cid = futures[future]
+                result[cid] = cid
+    except Exception as e:
+        logger.warning(f'Batch channel fetch failed: {e}')
+        for cid in to_fetch:
+            if cid not in result:
+                result[cid] = cid
+    
+    return result
+
+
 @reminder_bp.route('/api/reminders', methods=['GET'])
 def list_reminders():
+    """List all reminders - OPTIMIZED VERSION."""
+    start_time = time.time()
+    
+    try:
+        # Parse parameters
+        status_filter = request.args.get('status')
+        limit = min(int(request.args.get('limit', 100)), 1000)
+        offset = max(int(request.args.get('offset', 0)), 0)
+
+        db_manager = _reminder_service.reminder_repo.db
+        placeholder = '%s' if db_manager.database_type != 'sqlite' else '?'
+
+        # Build WHERE clause
+        where_conditions = []
+        params = []
+        if status_filter:
+            where_conditions.append(f'status = {placeholder}')
+            params.append(status_filter)
+        where_clause = ' AND '.join(where_conditions) if where_conditions else '1=1'
+
+        # Combined query: count + stats + data in one call
+        if not status_filter:
+            combined_query = f"""
+                WITH stats AS (
+                    SELECT 
+                        COUNT(*) as total,
+                        SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending,
+                        SUM(CASE WHEN status = 'sent' THEN 1 ELSE 0 END) as sent,
+                        SUM(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END) as cancelled,
+                        SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed
+                    FROM reminders
+                ),
+                data AS (
+                    SELECT * FROM reminders ORDER BY created_at DESC LIMIT {placeholder} OFFSET {placeholder}
+                )
+                SELECT 'stat' as type, total, pending, sent, cancelled, failed, 
+                       NULL as id, NULL as user_id, NULL as channel_id, NULL as deadline_text,
+                       NULL as deadline_datetime, NULL as reminder_datetime, NULL as status,
+                       NULL as created_at, NULL as thread_ts, NULL as message_ts
+                FROM stats
+                UNION ALL
+                SELECT 'row' as type, NULL, NULL, NULL, NULL, NULL,
+                       id, user_id, channel_id, deadline_text,
+                       deadline_datetime, reminder_datetime, status,
+                       created_at, thread_ts, message_ts
+                FROM data
+            """
+            rows = db_manager.fetch_all(combined_query, (limit, offset))
+            
+            # Parse results
+            total = 0
+            stats = {}
+            data_rows = []
+            for row in rows:
+                if row.get('type') == 'stat':
+                    total = row.get('total', 0)
+                    stats = {k: row.get(k, 0) for k in ['pending', 'sent', 'cancelled', 'failed']}
+                else:
+                    data_rows.append(row)
+        else:
+            # Fallback for filtered queries
+            count_result = db_manager.fetch_one(f'SELECT COUNT(*) as c FROM reminders WHERE {where_clause}', 
+                                               tuple(params) if params else None)
+            total = count_result['c'] if count_result else 0
+            stats = {}
+            
+            data_rows = db_manager.fetch_all(
+                f'SELECT * FROM reminders WHERE {where_clause} ORDER BY created_at DESC LIMIT {placeholder} OFFSET {placeholder}',
+                tuple(params) + (limit, offset)
+            )
+
+        # Batch fetch user/channel names concurrently
+        user_ids = {r.get('user_id') for r in data_rows if r.get('user_id')}
+        channel_ids = {r.get('channel_id') for r in data_rows if r.get('channel_id')}
+        
+        user_names = _batch_get_user_names(user_ids)
+        channel_names = _batch_get_channel_names(channel_ids)
+
+        # Format response
+        reminders = []
+        for row in data_rows:
+            reminders.append({
+                'id': row.get('id'),
+                'user_id': row.get('user_id'),
+                'user_name': user_names.get(row.get('user_id')),
+                'channel_id': row.get('channel_id'),
+                'channel_name': channel_names.get(row.get('channel_id')),
+                'thread_ts': row.get('thread_ts'),
+                'message_ts': row.get('message_ts'),
+                'deadline_text': row.get('deadline_text'),
+                'deadline_datetime': _format_dt(row.get('deadline_datetime')),
+                'reminder_datetime': _format_dt(row.get('reminder_datetime')),
+                'status': row.get('status'),
+                'created_at': _format_dt(row.get('created_at')),
+            })
+
+        return jsonify({
+            'total': total,
+            'limit': limit,
+            'offset': offset,
+            'stats': stats,
+            'reminders': reminders,
+            'response_time_ms': round((time.time() - start_time) * 1000, 2)
+        }), 200
+
+    except Exception as e:
+        logger.error(f'Error: {e}', exc=e)
+        return jsonify({'error': 'Internal server error'}), 500
+    finally:
+        if db_manager:
+            try:
+                db_manager.close()
+            except:
+                pass
     """List all reminders - FAST VERSION (avoids hanging transactions)."""
     start_time = time.time()
     try:
@@ -436,14 +650,13 @@ def get_audit_log(reminder_id: int):
 
 
 def _format_reminder(reminder) -> dict:
-    """Format reminder for JSON response."""
     return {
         'id': reminder.id,
         'channel_id': reminder.channel_id,
-        'channel_name': _get_channel_name(reminder.channel_id) if reminder.channel_id else None,
+        'channel_name': _batch_get_channel_names({reminder.channel_id}).get(reminder.channel_id) if reminder.channel_id else None,
         'thread_ts': reminder.thread_ts,
         'user_id': reminder.user_id,
-        'user_name': _get_user_name(reminder.user_id) if reminder.user_id else None,
+        'user_name': _batch_get_user_names({reminder.user_id}).get(reminder.user_id) if reminder.user_id else None,
         'message_ts': reminder.message_ts,
         'deadline_text': reminder.deadline_text,
         'deadline_datetime': reminder.deadline_datetime.isoformat() if reminder.deadline_datetime else None,

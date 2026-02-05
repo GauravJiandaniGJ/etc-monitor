@@ -778,13 +778,8 @@ def create_app(settings: Optional[Settings] = None) -> Flask:
         const storedTheme = localStorage.getItem('theme') || getSystemTheme();
         setTheme(storedTheme);
 
-        // Load on page load
+               // Load on page load
         loadReminders();
-        // Auto-refresh every 10 seconds for better responsiveness
-        setInterval(() => {
-            if (currentTab === 'all') loadReminders();
-            else loadPendingReminders();
-        }, 10000);
     </script>
 </body>
 </html>
