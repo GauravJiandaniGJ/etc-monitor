@@ -178,6 +178,38 @@ class GeminiService:
             logger.error('Gemini API connection test failed', exc=e)
             return False
     
+    def rephrase_task(self, task_text: str) -> Optional[str]:
+        """Rephrase a task message into a concise single sentence.
+
+        Uses Gemini to summarize and rephrase task messages for better readability.
+
+        Args:
+            task_text: Original task message text
+
+        Returns:
+            Rephrased task as single sentence, or original text if rephrasing fails
+        """
+        if not task_text:
+            return None
+
+        prompt = f"""Rephrase the following task message into a clear, concise single sentence summary.
+Keep it professional and actionable. Maximum 15 words.
+
+Task: {task_text}
+
+Rephrased (single sentence, max 15 words):"""
+
+        rephrased = self.generate(prompt, temperature=0.3, max_tokens=100)
+
+        if rephrased:
+            # Clean up the response - remove extra quotes, whitespace
+            rephrased = rephrased.strip().strip('"').strip("'")
+            logger.success(f'Rephrased task: "{task_text[:50]}..." -> "{rephrased}"')
+            return rephrased
+        else:
+            logger.warning('Failed to rephrase task, using original text')
+            return task_text
+
     def get_model_info(self) -> dict:
         """Get information about the configured model.
         

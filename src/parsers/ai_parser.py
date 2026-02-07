@@ -740,6 +740,72 @@ RESPOND WITH JSON ONLY:"""
             logger.error(f"[AI] Parse error: {e}", exc=e)
             return None
 
+    def rephrase_task(self, task_text: str) -> Optional[str]:
+        """Rephrase a task message into a concise single sentence.
+
+        Uses Gemini to summarize and rephrase task messages for better readability.
+
+        Args:
+            task_text: Original task message text
+
+        Returns:
+            Rephrased task as single sentence, or original text if rephrasing fails
+        """
+        if not task_text:
+            return None
+
+        if not self.is_available():
+            logger.debug('[Rephrase] AI not available, using original text')
+            return task_text
+
+        prompt = f"""Rephrase the following task message into a clear, concise single sentence summary.
+Keep it professional and actionable. Maximum 15 words.
+
+Task: {task_text}
+
+Rephrased (single sentence, max 15 words):"""
+
+        try:
+            # Try to get response with timeout
+            future = self._executor.submit(self._generate_with_client, prompt)
+            try:
+                response_text = future.result(timeout=3)  # 3 second timeout for rephrasing
+                if response_text:
+                    # Clean up the response
+                    rephrased = response_text.strip().strip('"').strip("'")
+                    logger.success(f'[Rephrase] "{task_text[:50]}..." -> "{rephrased}"')
+                    return rephrased
+                else:
+                    logger.warning('[Rephrase] Empty response from AI')
+                    return task_text
+            except FutureTimeoutError:
+                logger.warning('[Rephrase] Timeout, using original text')
+                return task_text
+        except Exception as e:
+            logger.warning(f'[Rephrase] Error: {e}, using original text')
+            return task_text
+
+    def _generate_with_client(self, prompt: str) -> Optional[str]:
+        """Generate response using the AI client.
+
+        Args:
+            prompt: Prompt text
+
+        Returns:
+            Generated text or None
+        """
+        if not self.client:
+            return None
+
+        try:
+            response = self.client.generate_content(prompt)
+            if response and response.text:
+                return response.text.strip()
+            return None
+        except Exception as e:
+            logger.debug(f'[AI] Generation error: {e}')
+            return None
+
     def __del__(self):
         """Cleanup executor on destruction."""
         if hasattr(self, '_executor'):

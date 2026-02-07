@@ -92,6 +92,9 @@ class SlackBot:
         slack_client = WebClient(token=settings.slack_bot_token)
         self.notification_service = NotificationService(slack_client)
 
+        # Store AI parser for morning summary rephrasing
+        self.ai_parser = ai_parser
+
         # Initialize scheduler
         logger.info('Initializing scheduler')
         self.scheduler = ReminderScheduler(reminder_repo=self.reminder_repo)
@@ -107,7 +110,8 @@ class SlackBot:
 
         self.command_handler = CommandHandler(
             reminder_service=self.reminder_service,
-            notification_service=self.notification_service
+            notification_service=self.notification_service,
+            ai_service=ai_parser
         )
 
         # Initialize Slack Bolt app
@@ -182,6 +186,11 @@ class SlackBot:
             """Handle /list-thread-reminders command."""
             self.command_handler.handle_list_thread_reminders(ack, respond, command)
 
+        @self.app.command("/etc-summary")
+        def handle_etc_summary_command(ack, respond, command):
+            """Handle /etc-summary command."""
+            self.command_handler.handle_etc_summary(ack, respond, command)
+
         logger.success('Event handlers registered')
 
     def start(self):
@@ -204,6 +213,14 @@ class SlackBot:
             loaded_count = self.scheduler.load_pending_reminders(reminder_callback)
             logger.info(f'Loaded {loaded_count} pending reminders from database')
 
+            # Schedule daily morning summary at 9 AM IST
+            def morning_summary_callback():
+                """Callback for daily morning summary."""
+                self._send_morning_summaries()
+
+            self.scheduler.schedule_morning_summary(morning_summary_callback, hour=9, minute=0)
+            logger.info('Scheduled daily morning summary at 09:00 IST')
+
             # Connect to Slack
             logger.info('Connecting to Slack via Socket Mode')
             self.handler.connect()
@@ -212,6 +229,57 @@ class SlackBot:
         except Exception as e:
             logger.error(f'Error starting bot: {e}', exc=e)
             raise
+
+    def _send_morning_summaries(self):
+        """Send morning summaries to all users with pending reminders.
+
+        Fetches all pending reminders, groups by user, and sends summaries.
+        Only sends for reminders where deadline is still in the future.
+        """
+        try:
+            from src.utils.timezone import now_ist
+            logger.info('Starting morning summary generation')
+
+            # Get all pending reminders
+            pending_reminders = self.reminder_repo.get_pending()
+            current_time = now_ist()
+
+            # Filter to only reminders with future deadlines
+            future_reminders = []
+            for reminder in pending_reminders:
+                if reminder.deadline_datetime:
+                    from src.utils.timezone import make_aware
+                    deadline_time = reminder.deadline_datetime
+                    if deadline_time.tzinfo is None:
+                        deadline_time = make_aware(deadline_time)
+
+                    if deadline_time > current_time:
+                        future_reminders.append(reminder)
+
+            if not future_reminders:
+                logger.info('No pending reminders with future deadlines for morning summary')
+                return
+
+            # Group reminders by user
+            user_reminders = {}
+            for reminder in future_reminders:
+                if reminder.user_id not in user_reminders:
+                    user_reminders[reminder.user_id] = []
+                user_reminders[reminder.user_id].append(reminder)
+
+            # Send summary to each user
+            for user_id, reminders in user_reminders.items():
+                logger.info(f'Sending morning summary to {user_id} ({len(reminders)} tasks)')
+                self.notification_service.send_morning_summary(
+                    user_id,
+                    reminders,
+                    ai_service=self.ai_parser
+                )
+
+            logger.success(f'Morning summaries sent to {len(user_reminders)} users')
+
+        except Exception as e:
+            logger.error(f'Error sending morning summaries: {e}', exc=e)
 
     def stop(self):
         """Stop the bot.

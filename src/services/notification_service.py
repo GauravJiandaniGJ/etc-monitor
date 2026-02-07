@@ -324,6 +324,169 @@ class NotificationService:
         self.channel_cache[channel_id] = channel_id
         return channel_id
 
+    def get_message_permalink(self, channel_id: str, message_ts: str) -> Optional[str]:
+        """Get permalink URL for a Slack message.
+
+        Args:
+            channel_id: Slack channel ID
+            message_ts: Message timestamp
+
+        Returns:
+            Permalink URL, or None if fetch fails
+        """
+        if not self.client:
+            logger.warning('Slack client not available')
+            return None
+
+        try:
+            response = self.client.chat_getPermalink(
+                channel=channel_id,
+                message_ts=message_ts
+            )
+
+            if response['ok'] and response.get('permalink'):
+                permalink = response['permalink']
+                logger.debug(f'Fetched permalink: {permalink}')
+                return permalink
+            else:
+                logger.warning(f'Failed to fetch permalink: {response.get("error", "Unknown error")}')
+                return None
+
+        except SlackApiError as e:
+            logger.error(f'Slack API error fetching permalink: {e}')
+            return None
+        except Exception as e:
+            logger.error(f'Unexpected error fetching permalink: {e}')
+            return None
+
+    def fetch_parent_message(self, channel_id: str, thread_ts: str) -> Optional[str]:
+        """Fetch the parent message text from a Slack thread.
+
+        Args:
+            channel_id: Slack channel ID
+            thread_ts: Thread timestamp (this is also the parent message timestamp)
+
+        Returns:
+            Parent message text, or None if fetch fails
+        """
+        if not self.client:
+            logger.warning('Slack client not available')
+            return None
+
+        try:
+            # Fetch the conversation history with the specific message
+            response = self.client.conversations_history(
+                channel=channel_id,
+                latest=thread_ts,
+                inclusive=True,
+                limit=1
+            )
+
+            if response['ok'] and response.get('messages'):
+                parent_message = response['messages'][0]
+                message_text = parent_message.get('text', '')
+                logger.debug(f'Fetched parent message: "{message_text[:100]}..."')
+                return message_text
+            else:
+                logger.warning(f'Failed to fetch parent message: {response.get("error", "Unknown error")}')
+                return None
+
+        except SlackApiError as e:
+            logger.error(f'Slack API error fetching parent message: {e}')
+            return None
+        except Exception as e:
+            logger.error(f'Unexpected error fetching parent message: {e}')
+            return None
+
+    def send_morning_summary(
+        self,
+        user_id: str,
+        reminders: list,
+        ai_service=None
+    ) -> bool:
+        """Send morning summary of pending tasks to a user.
+
+        Fetches parent messages from threads, rephrases them with AI,
+        and sends a formatted summary.
+
+        Args:
+            user_id: Slack user ID to send summary to
+            reminders: List of Reminder objects
+            ai_service: Optional AI service for rephrasing (GeminiService)
+
+        Returns:
+            True if sent successfully, False otherwise
+        """
+        if not reminders:
+            logger.debug(f'No pending reminders for user {user_id}')
+            return True
+
+        logger.info(f'Preparing morning summary for user {user_id} with {len(reminders)} tasks')
+
+        try:
+            tasks = []
+            for idx, reminder in enumerate(reminders, 1):
+                # Fetch parent message
+                parent_msg = self.fetch_parent_message(reminder.channel_id, reminder.thread_ts)
+
+                if parent_msg:
+                    # Rephrase with AI if available
+                    if ai_service and hasattr(ai_service, 'rephrase_task'):
+                        task_summary = ai_service.rephrase_task(parent_msg)
+                    else:
+                        # Fallback: use first 50 chars of parent message
+                        task_summary = parent_msg[:50] + ('...' if len(parent_msg) > 50 else '')
+                else:
+                    # Fallback: use deadline_text
+                    task_summary = reminder.deadline_text or 'Task'
+
+                # Get proper Slack permalink
+                thread_link = self.get_message_permalink(reminder.channel_id, reminder.thread_ts)
+
+                # Fallback if permalink fetch fails
+                if not thread_link:
+                    thread_link = f"https://slack.com/app_redirect?channel={reminder.channel_id}&message_ts={reminder.thread_ts}"
+
+                # Format deadline
+                deadline_str = format_datetime_friendly(reminder.deadline_datetime)
+
+                tasks.append(f"{idx}. {task_summary} (Due: {deadline_str}) - <{thread_link}|View Thread>")
+
+            # Determine greeting based on time of day
+            current_hour = now_ist().hour
+            if 5 <= current_hour < 12:
+                greeting = "Good morning"
+            elif 12 <= current_hour < 17:
+                greeting = "Good afternoon"
+            else:
+                greeting = "Good evening"
+
+            # Create summary message
+            message = f"{greeting} <@{user_id}>!\n\n"
+            message += f"You have {len(tasks)} pending task{'s' if len(tasks) > 1 else ''}:\n\n"
+            message += '\n'.join(tasks)
+
+            # Send as DM
+            response = self.client.chat_postMessage(
+                channel=user_id,
+                text=message
+            )
+
+            if response["ok"]:
+                logger.success(f'Morning summary sent to {user_id}')
+                return True
+            else:
+                error = response.get('error', 'Unknown error')
+                logger.error(f'Failed to send morning summary: {error}')
+                return False
+
+        except SlackApiError as e:
+            logger.error(f'Slack API error sending morning summary: {e}')
+            return False
+        except Exception as e:
+            logger.error(f'Unexpected error sending morning summary: {e}')
+            return False
+
     def clear_cache(self):
         """Clear user and channel name caches.
 

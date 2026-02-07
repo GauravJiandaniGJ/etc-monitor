@@ -182,6 +182,8 @@ class ReminderScheduler:
         This should be called on startup to restore all pending reminders
         that were scheduled before the application restarted.
 
+        Only schedules reminders where deadline_datetime is in the future.
+
         Args:
             callback: Callback function to execute when reminder is due
 
@@ -203,16 +205,16 @@ class ReminderScheduler:
             skipped_count = 0
 
             for reminder in pending_reminders:
-                # Check if reminder is still in the future
-                if reminder.reminder_datetime:
+                # Check if DEADLINE (not reminder time) is still in the future
+                if reminder.deadline_datetime:
                     # Ensure timezone awareness
-                    reminder_time = reminder.reminder_datetime
-                    if reminder_time.tzinfo is None:
+                    deadline_time = reminder.deadline_datetime
+                    if deadline_time.tzinfo is None:
                         from src.utils.timezone import make_aware
-                        reminder_time = make_aware(reminder_time)
+                        deadline_time = make_aware(deadline_time)
 
-                    # Only schedule if in the future
-                    if reminder_time > current_time:
+                    # Only schedule if deadline is in the future
+                    if deadline_time > current_time:
                         if self.schedule(reminder, callback):
                             loaded_count += 1
                         else:
@@ -220,11 +222,11 @@ class ReminderScheduler:
                     else:
                         logger.debug(
                             f'Skipping expired reminder {reminder.id} '
-                            f'(was due at {reminder_time})'
+                            f'(deadline {deadline_time} has passed)'
                         )
                         skipped_count += 1
                 else:
-                    logger.warning(f'Reminder {reminder.id} has no reminder_datetime')
+                    logger.warning(f'Reminder {reminder.id} has no deadline_datetime')
                     skipped_count += 1
 
             logger.success(
@@ -252,3 +254,49 @@ class ReminderScheduler:
             Number of scheduled jobs
         """
         return len(self.scheduler.get_jobs())
+
+    def schedule_morning_summary(
+        self,
+        callback: Callable,
+        hour: int = 9,
+        minute: int = 0
+    ) -> bool:
+        """Schedule daily morning summary job.
+
+        Schedules a recurring job to send morning summaries every day.
+
+        Args:
+            callback: Callback function to execute daily
+            hour: Hour of day (0-23, default 9 for 9 AM)
+            minute: Minute of hour (0-59, default 0)
+
+        Returns:
+            True if scheduled successfully, False otherwise
+        """
+        try:
+            job_id = 'morning_summary_daily'
+
+            # Check if job already exists and remove it
+            existing_job = self.get_job(job_id)
+            if existing_job:
+                logger.info(f'Removing existing morning summary job {job_id}')
+                self.cancel(job_id)
+
+            # Schedule daily job at specified time
+            self.scheduler.add_job(
+                callback,
+                'cron',
+                hour=hour,
+                minute=minute,
+                id=job_id,
+                replace_existing=True
+            )
+
+            logger.success(
+                f'Scheduled morning summary job to run daily at {hour:02d}:{minute:02d}'
+            )
+            return True
+
+        except Exception as e:
+            logger.error(f'Error scheduling morning summary: {e}')
+            return False

@@ -12,22 +12,25 @@ logger = get_logger('CommandHandler')
 class CommandHandler:
     """Handler for Slack slash commands.
 
-    Handles commands like /my-reminders, /cancel-reminder, and /list-thread-reminders.
+    Handles commands like /my-reminders, /cancel-reminder, /list-thread-reminders, and /etc-summary.
     """
 
     def __init__(
         self,
         reminder_service: ReminderService,
-        notification_service: NotificationService
+        notification_service: NotificationService,
+        ai_service=None
     ):
         """Initialize command handler.
 
         Args:
             reminder_service: Service for managing reminders
             notification_service: Service for sending Slack messages
+            ai_service: Optional AI service for rephrasing (GeminiService)
         """
         self.reminder_service = reminder_service
         self.notification_service = notification_service
+        self.ai_service = ai_service
         logger.info('Command handler initialized')
 
     def handle_my_reminders(
@@ -260,3 +263,71 @@ class CommandHandler:
         except Exception as e:
             logger.error(f'Error handling /list-thread-reminders: {e}', exc=e)
             respond("Error: Failed to retrieve thread reminders. Please try again later.")
+
+    def handle_etc_summary(
+        self,
+        ack: Callable,
+        respond: Callable,
+        command: dict
+    ) -> None:
+        """Handle /etc-summary command.
+
+        Sends an immediate summary of all pending tasks to the user.
+        Similar to morning summary but triggered on demand.
+
+        Args:
+            ack: Slack ack function to acknowledge the command
+            respond: Slack respond function to send response
+            command: Command dictionary from Slack
+        """
+        try:
+            # Acknowledge the command
+            ack()
+
+            user_id = command.get('user_id')
+            if not user_id:
+                respond("Error: Could not identify user")
+                return
+
+            logger.info(f'Handling /etc-summary command from user {user_id}')
+
+            # Get user's pending reminders
+            reminders = self.reminder_service.get_user_reminders(user_id)
+
+            # Filter to only pending/rescheduled reminders with future deadlines
+            current_time = now_ist()
+            from src.utils.timezone import make_aware
+
+            active_reminders = []
+            for reminder in reminders:
+                if reminder.status.value in ['pending', 'rescheduled']:
+                    if reminder.deadline_datetime:
+                        deadline_time = reminder.deadline_datetime
+                        if deadline_time.tzinfo is None:
+                            deadline_time = make_aware(deadline_time)
+
+                        # Only include if deadline is in the future
+                        if deadline_time > current_time:
+                            active_reminders.append(reminder)
+
+            if not active_reminders:
+                respond("You don't have any pending tasks with upcoming deadlines.")
+                return
+
+            # Send the summary using the notification service
+            success = self.notification_service.send_morning_summary(
+                user_id,
+                active_reminders,
+                ai_service=self.ai_service
+            )
+
+            if success:
+                respond(f"Summary sent! You have {len(active_reminders)} pending task(s).")
+                logger.success(f'Sent summary to user {user_id}')
+            else:
+                respond("Error: Failed to send summary. Please try again later.")
+                logger.error(f'Failed to send summary to user {user_id}')
+
+        except Exception as e:
+            logger.error(f'Error handling /etc-summary: {e}', exc=e)
+            respond("Error: Failed to generate summary. Please try again later.")

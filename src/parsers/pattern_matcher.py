@@ -185,69 +185,90 @@ class PatternMatcher:
         logger.info(f'Pattern matcher initialized with {len(self.deadline_patterns)} patterns')
 
     def has_etc_indicator(self, text: str) -> bool:
-        """Check if text contains ETC indicator.
+        """Check if text contains ETC (Estimated Time of Completion) indicator.
 
-        Detects ETC in various formats:
-        - Direct: "ETC:", "ETC ", "ETC-", "ETC=", "ETC("
-        - Natural language: "my etc for", "etc is", "etc of", "etc for this"
-        - Any sentence containing "etc" followed by time/date information
+        ONLY returns True if BOTH conditions are met:
+        1. Message contains "ETC" or "etc" in deadline context (not "et cetera")
+        2. Message contains actual time/date information (today, tomorrow, EOD, 5pm, etc.)
+
+        Excludes "etc" when used as "et cetera" abbreviation.
 
         Args:
             text: Text to check
 
         Returns:
-            True if text contains ETC indicator
+            True if text contains BOTH ETC keyword AND time/date information
         """
         message_upper = text.upper().strip()
 
-        # Check for direct ETC keywords (strict patterns)
-        etc_keywords = ['ETC:', 'ETC ', 'ETC-', 'ETC=', 'ETC(']
+        # EXCLUSION: Check if "etc" is being used as "et cetera" (abbreviation)
+        # Common patterns: "add etc", "like etc", "etc.", ", etc", "etc here"
+        et_cetera_patterns = [
+            r'\bADD\s+ETC\b',           # "add etc"
+            r'\bLIKE\s+ETC\b',          # "like etc"
+            r'\bETC\.',                 # "etc."
+            r',\s*ETC\b',               # ", etc"
+            r'\bETC\s+HERE\b',          # "etc here"
+            r'\bAND\s+ETC\b',           # "and etc"
+            r'\bOR\s+ETC\b',            # "or etc"
+            r'\bETCETERA\b',            # "etcetera"
+        ]
+
+        # If message matches et cetera pattern, it's NOT a deadline
+        if any(re.search(pattern, message_upper) for pattern in et_cetera_patterns):
+            logger.debug(f'Rejected: "etc" used as et cetera in: {text[:50]}...')
+            return False
+
+        # Check for direct ETC keywords
+        etc_keywords = ['ETC:', 'ETC ', 'ETC-', 'ETC=', 'ETC(', 'ETC\n', 'ETC\t']
         has_etc_keyword = any(keyword in message_upper for keyword in etc_keywords)
 
-        # Also check for natural language ETC patterns (flexible)
-        # Patterns like: "my etc for", "etc is", "etc of", "etc for this", "etc for project"
+        # Check for natural language ETC patterns (deadline-specific)
         natural_etc_patterns = [
-            r'\bETC\s+FOR\b',  # "etc for"
-            r'\bETC\s+IS\b',   # "etc is"
-            r'\bETC\s+OF\b',   # "etc of"
-            r'\bETC\s+FOR\s+THIS\b',  # "etc for this"
-            r'\bETC\s+FOR\s+THE\b',  # "etc for the"
+            r'\bETC\s+(FOR|IS|OF|AT|TILL|BY|UNTIL)\b',  # "etc for/is/of/at/till/by/until"
             r'\bMY\s+ETC\b',   # "my etc"
             r'\bTHE\s+ETC\b',  # "the etc"
-            r'\bAN\s+ETC\b',   # "an etc"
         ]
 
         has_natural_etc = any(re.search(pattern, message_upper) for pattern in natural_etc_patterns)
 
-        # Time/date indicators to look for
-        # Also handle "with in" as a typo for "within"
+        # If no ETC keyword found, return False immediately
+        if not (has_etc_keyword or has_natural_etc):
+            return False
+
+        # CRITICAL: Now check if message has actual time/date information
+        # ONLY proceed if we find deadline indicators
         time_indicators = [
-            r'\d+\s*(min|mins|minute|minutes|hour|hours|day|days|week|weeks)',
-            r'(with\s+in|within)\s+\d+\s*(min|mins|minute|minutes|hour|hours|day|days|week|weeks)',  # Handle "with in 5 hours"
-            r'(today|tomorrow|tonight|monday|tuesday|wednesday|thursday|friday|saturday|sunday)',
+            # Relative time
+            r'\d+\s*(min|mins|minute|minutes|hour|hours|hr|hrs)',
+            r'\d+\s*(day|days|week|weeks|month|months)',
+            r'(within|in)\s+\d+\s*(min|mins|minute|minutes|hour|hours|day|days|week|weeks)',
+
+            # Absolute dates
+            r'\b(today|tomorrow|tonight|yesterday)\b',
+            r'\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b',
+
+            # Times
             r'\d{1,2}(:\d{2})?\s*(am|pm|AM|PM)',
-            r'(EOD|eod|end of day|morning|evening|night|noon)',
+            r'\bat\s+\d{1,2}(:\d{2})?\b',
+
+            # EOD and time of day
+            r'\b(EOD|eod|end of day|morning|evening|night|noon|midnight)\b',
+
+            # Dates
             r'\d{1,2}(st|nd|rd|th)?\s*(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)',
+            r'(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\s+\d{1,2}',
         ]
 
-        # If we found ETC (direct or natural), check for time/date indicators in the message
-        if has_etc_keyword or has_natural_etc:
-            # Extract text after ETC (for direct patterns)
-            etc_match = re.search(r'ETC[:\s\-=\(]*(.+)', text, re.IGNORECASE)
-            if etc_match:
-                etc_content = etc_match.group(1).strip()
-                # Check if content has time/date indicators
-                for indicator in time_indicators:
-                    if re.search(indicator, etc_content, re.IGNORECASE):
-                        return True
+        # Check if message has ANY time/date indicator
+        has_time_info = any(re.search(indicator, text, re.IGNORECASE) for indicator in time_indicators)
 
-            # For natural language, check if message contains time/date indicators anywhere
-            # This handles cases like "My etc for this project is of 2 hours"
-            for indicator in time_indicators:
-                if re.search(indicator, text, re.IGNORECASE):
-                    return True
-
-        return has_etc_keyword or has_natural_etc
+        if has_time_info:
+            logger.debug(f'Valid ETC found with time/date in: {text[:50]}...')
+            return True
+        else:
+            logger.debug(f'Rejected: ETC found but NO time/date info in: {text[:50]}...')
+            return False
 
     def extract_deadline_text(self, text: str) -> Optional[str]:
         """Extract deadline text from message.
