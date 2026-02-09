@@ -6,7 +6,7 @@ from apscheduler.job import Job
 from src.core.models import Reminder
 from src.database.repositories.reminder_repository import ReminderRepository
 from src.utils.logger import get_logger
-from src.utils.timezone import now_ist
+from src.utils.timezone import now_ist, IST
 
 
 logger = get_logger('ReminderScheduler')
@@ -282,12 +282,13 @@ class ReminderScheduler:
                 logger.info(f'Removing existing morning summary job {job_id}')
                 self.cancel(job_id)
 
-            # Schedule daily job at specified time
+            # Schedule daily job at specified time in IST timezone
             self.scheduler.add_job(
                 callback,
                 'cron',
                 hour=hour,
                 minute=minute,
+                timezone=IST,
                 id=job_id,
                 replace_existing=True
             )

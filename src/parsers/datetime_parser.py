@@ -365,17 +365,56 @@ class DateTimeParser:
                 logger.info(f'Parsed time of day: {text} -> {target_date} (hour={hour}, minute={minute})')
                 return target_date
 
-        # Try 24-hour format: "14:30", "17:00"
+        # Try time format without AM/PM: "8:30", "14:30"
+        # CONTEXT-AWARE: If the hour is ambiguous (1-12), apply context
         match = re.search(r'(\d{1,2}):(\d{2})', text)
         if match:
             hour = int(match.group(1))
             minute = int(match.group(2))
 
             if 0 <= hour <= 23 and 0 <= minute <= 59:
+                # CONTEXT-AWARE LOGIC for ambiguous hours (1-12)
+                if 1 <= hour <= 12:
+                    current_hour = now.hour
+
+                    # If it's currently afternoon/evening (1 PM or later)
+                    # and the hour is 1-12, assume PM unless it would be in the past
+                    if current_hour >= 13:
+                        # Try PM first
+                        pm_hour = hour if hour == 12 else hour + 12
+                        test_time = now.replace(hour=pm_hour, minute=minute, second=0, microsecond=0)
+
+                        if test_time > now:
+                            # PM works and is in the future - use it
+                            hour = pm_hour
+                            logger.info(f'Context-aware: Current time is {current_hour}:{now.minute:02d} (afternoon/evening), '
+                                      f'interpreting "{match.group(1)}:{minute:02d}" as {hour}:{minute:02d} (PM)')
+                        else:
+                            # PM is in the past, so it must mean AM tomorrow
+                            hour = hour if hour != 12 else 0
+                            logger.info(f'Context-aware: Current time is {current_hour}:{now.minute:02d}, '
+                                      f'PM would be in past, interpreting as {hour}:{minute:02d} AM tomorrow')
+                    else:
+                        # It's currently morning (before 1 PM)
+                        # Check if AM is still in the future
+                        am_hour = hour if hour != 12 else 0
+                        test_time = now.replace(hour=am_hour, minute=minute, second=0, microsecond=0)
+
+                        if test_time > now:
+                            # AM works and is in the future - use it
+                            hour = am_hour
+                            logger.info(f'Context-aware: Current time is {current_hour}:{now.minute:02d} (morning), '
+                                      f'interpreting "{match.group(1)}:{minute:02d}" as {hour}:{minute:02d} AM')
+                        else:
+                            # AM is in the past, assume PM today
+                            hour = hour if hour == 12 else hour + 12
+                            logger.info(f'Context-aware: Current time is {current_hour}:{now.minute:02d}, '
+                                      f'AM would be in past, interpreting as {hour}:{minute:02d} PM')
+
                 target_date = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
                 if target_date <= now:
                     target_date += timedelta(days=1)
-                logger.info(f'Parsed 24-hour time: {text} -> {target_date}')
+                logger.info(f'Parsed time: {text} -> {target_date}')
                 return target_date
 
         # Try standalone hour - CONTEXT-AWARE PARSING
