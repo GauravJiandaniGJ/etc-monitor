@@ -10,7 +10,7 @@ from src.database.repositories.audit_repository import AuditRepository
 from src.services.reminder_service import ReminderService
 from src.services.notification_service import NotificationService
 from src.core.models import ReminderStatus
-from config.settings import Settings
+from src.config.settings import Settings
 from src.utils.logger import get_logger
 from slack_sdk import WebClient
 

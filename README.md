@@ -26,7 +26,7 @@ A Slack bot that automatically detects and tracks "ETC" (Estimated Time of Compl
 ### 1. Clone and Install
 
 ```bash
-cd etc-moniter
+cd etc-monitor
 pip install -r requirements.txt
 ```
 
@@ -76,8 +76,10 @@ The admin panel will be available at `http://localhost:5000` (or the port specif
 ## 📁 Project Structure
 
 ```
-etc-moniter/
+etc-monitor/
+├── docs/                 # Documentation
 ├── src/
+│   ├── config/           # Configuration settings
 │   ├── bot/              # Slack bot application
 │   │   ├── app.py        # Bot entry point
 │   │   ├── handlers/     # Message and command handlers
@@ -85,6 +87,8 @@ etc-moniter/
 │   ├── admin/            # Admin panel (Flask)
 │   │   ├── app.py        # Admin entry point
 │   │   ├── routes/       # API routes
+│   │   ├── templates/    # HTML templates
+│   │   ├── static/       # CSS/JS assets
 │   │   └── middleware/   # Auth middleware
 │   ├── services/         # Business logic services
 │   ├── parsers/          # Deadline parsing (AI + regex)
@@ -93,7 +97,6 @@ etc-moniter/
 │   │   └── migrations/   # Schema migrations
 │   ├── core/             # Core models
 │   └── utils/            # Utilities (logger, timezone)
-├── config/               # Configuration
 ├── scripts/              # Setup scripts
 ├── tests/                # Test suite
 ├── run_bot.py            # Bot entry point

@@ -2,7 +2,7 @@
 from functools import wraps
 from flask import request, Response, make_response
 import base64
-from config.settings import Settings
+from src.config.settings import Settings
 from src.utils.logger import get_logger
 
 

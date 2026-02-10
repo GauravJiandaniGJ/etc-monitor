@@ -3,7 +3,7 @@ from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 from slack_sdk import WebClient
 
-from config.settings import Settings
+from src.config.settings import Settings
 from src.database.db_manager import DBManager
 from src.database.repositories.reminder_repository import ReminderRepository
 from src.database.repositories.audit_repository import AuditRepository

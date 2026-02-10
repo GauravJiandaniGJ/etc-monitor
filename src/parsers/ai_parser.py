@@ -6,6 +6,7 @@ Production-grade implementation with:
 - Always-on AI parsing (no skipping)
 - Robust error handling and fallback
 - Optimized for real-time responses
+- Uses GeminiService for API communication (no duplication)
 """
 
 import json
@@ -16,23 +17,19 @@ from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
 import threading
 
 from src.core.models import ParsedDeadline
+from src.services.ai_service import GeminiService
 from src.utils.logger import get_logger
 from src.utils.timezone import now_ist
 
 logger = get_logger("AIParser")
 
-# Gemini availability check
-try:
-    import google.generativeai as genai
-    GEMINI_AVAILABLE = True
-except ImportError:
-    GEMINI_AVAILABLE = False
-    logger.warning("google-generativeai not installed. AI parsing disabled.")
-
 
 class AIParser:
     """
     Production-grade AI-based ETC parser.
+
+    Delegates Gemini API communication to GeminiService, keeping this class
+    focused on prompt engineering, response validation, and deadline extraction.
 
     Design principles:
     - Always use AI first (no skipping)
@@ -56,123 +53,27 @@ class AIParser:
             temperature: Model temperature (0.0-1.0)
             timeout_seconds: Maximum time to wait for AI response
         """
-        self.api_key = api_key
-        self.model = model
-        self.temperature = temperature
         self.timeout_seconds = timeout_seconds
-        self.client = None
-        self.available_models = []  # Store available models for fallback
         self._executor = ThreadPoolExecutor(max_workers=3, thread_name_prefix="ai-parser")
         self._lock = threading.Lock()
 
-        if not GEMINI_AVAILABLE:
-            logger.warning("Gemini library not available")
-            return
+        # Delegate all Gemini setup to GeminiService
+        self._gemini = GeminiService(
+            api_key=api_key,
+            model=model,
+            temperature=temperature,
+            max_retries=1,  # Single attempt — we handle timeout ourselves
+            retry_delay=0.5,
+        )
 
-        if not api_key:
-            logger.warning("Gemini API key not configured")
-            return
-
-        try:
-            genai.configure(api_key=api_key)
-
-            # List available models to find a working one
-            try:
-                available_models = []
-                available_models_full = []  # Store full paths too
-                for m in genai.list_models():
-                    if 'generateContent' in m.supported_generation_methods:
-                        # Store both full path and short name
-                        full_name = m.name  # e.g., "models/gemini-1.5-flash"
-                        short_name = m.name.split('/')[-1] if '/' in m.name else m.name
-                        available_models.append(short_name)
-                        available_models_full.append(full_name)
-
-                if available_models:
-                    logger.info(f"Found {len(available_models)} available Gemini models")
-                    logger.debug(f"Available models: {', '.join(available_models[:10])}")
-                    self.available_models = available_models_full  # Store full paths for fallback
-                else:
-                    logger.warning("No models found via list_models, trying common names...")
-                    available_models = []
-                    self.available_models = []
-
-                # Try models in order of preference
-                models_to_try = [
-                    model,  # User's preferred model first
-                ]
-
-                # Add preferred models
-                preferred = ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-pro"]
-                models_to_try.extend(preferred)
-
-                # Add available models that match our preferences
-                for avail_model in available_models:
-                    if avail_model not in models_to_try:
-                        models_to_try.append(avail_model)
-
-                # Remove duplicates while preserving order
-                seen = set()
-                models_to_try = [m for m in models_to_try if m not in seen and not seen.add(m)]
-
-                working_model = None
-                for model_name in models_to_try:
-                    try:
-                        logger.debug(f"Trying model: {model_name}")
-                        self.client = genai.GenerativeModel(
-                            model_name=model_name,
-                            generation_config={
-                                "temperature": temperature,
-                                "max_output_tokens": 2048,  # Increased for comprehensive responses and accuracy
-                            },
-                        )
-                        working_model = model_name
-                        logger.success(f"Gemini AI initialized: {working_model} (timeout: {timeout_seconds}s)")
-                        break
-                    except Exception as test_error:
-                        logger.debug(f"Model {model_name} failed: {test_error}")
-                        continue
-
-                if not working_model:
-                    raise Exception("No working Gemini model found. Check your API key and model availability.")
-
-                self.model = working_model
-
-            except Exception as list_error:
-                # If list_models fails, try common model names
-                logger.warning(f"Could not list models: {list_error}. Trying common model names...")
-                common_models = [
-                    model,  # User's preferred
-                    "gemini-1.5-flash",
-                    "gemini-1.5-pro",
-                    "gemini-pro"
-                ]
-
-                for model_name in common_models:
-                    try:
-                        self.client = genai.GenerativeModel(
-                            model_name=model_name,
-                            generation_config={
-                                "temperature": temperature,
-                                "max_output_tokens": 2048,  # Increased for comprehensive responses and accuracy
-                            },
-                        )
-                        self.model = model_name
-                        logger.success(f"Gemini AI initialized: {model_name} (timeout: {timeout_seconds}s)")
-                        break
-                    except Exception as e:
-                        logger.debug(f"Model {model_name} failed: {e}")
-                        continue
-                else:
-                    raise Exception(f"Failed to initialize any Gemini model. Check your API key. Last error: {list_error}")
-
-        except Exception as e:
-            logger.error("Failed to initialize Gemini", exc=e)
-            self.client = None
+        if self._gemini.is_configured():
+            logger.success(f"AIParser initialized via GeminiService (timeout: {timeout_seconds}s)")
+        else:
+            logger.warning("AIParser: GeminiService not configured — AI parsing disabled")
 
     def is_available(self) -> bool:
         """Check if AI parser is available."""
-        return self.client is not None
+        return self._gemini.is_configured()
 
     def parse_deadline(
         self, text: str, reference_time: Optional[datetime] = None
@@ -232,7 +133,10 @@ class AIParser:
 
     def _call_ai(self, text: str, now: datetime) -> Optional[Dict]:
         """
-        Call Gemini AI with timeout protection and model fallback.
+        Call Gemini AI with timeout protection.
+
+        Uses GeminiService for the actual API call, adding thread-pool
+        timeout and response validation on top.
 
         Args:
             text: Message text
@@ -245,179 +149,115 @@ class AIParser:
 
         prompt = self._build_prompt(text, now)
 
-        # Build list of models to try
-        models_to_try = []
+        try:
+            # Run GeminiService.generate() inside thread pool for timeout control
+            def run_ai():
+                return self._gemini.generate(prompt)
 
-        # Try current model in both formats
-        if self.model:
-            models_to_try.append(self.model)
-            if not self.model.startswith('models/'):
-                models_to_try.append(f"models/{self.model}")
+            future = self._executor.submit(run_ai)
+            response_text = future.result(timeout=self.timeout_seconds)
+        except FutureTimeoutError:
+            logger.warning(f'[AI] Timeout after {self.timeout_seconds}s')
+            return None
+        except Exception as e:
+            logger.error(f'[AI] Generation failed: {e}')
+            return None
 
-        # Add available models from initialization (these are full paths like "models/gemini-1.5-flash")
-        if self.available_models:
-            for avail_model in self.available_models:
-                if avail_model not in models_to_try:
-                    models_to_try.append(avail_model)
-                # Also try short name format
-                if avail_model.startswith('models/'):
-                    short_name = avail_model.split('/')[-1]
-                    if short_name not in models_to_try:
-                        models_to_try.append(short_name)
+        if not response_text:
+            logger.warning('[AI] Empty response from Gemini')
+            return None
 
-        # Fallback to common names if no available models
-        if not self.available_models:
-            common_models = ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-pro"]
-            for cm in common_models:
-                if cm not in models_to_try:
-                    models_to_try.append(cm)
-                if f"models/{cm}" not in models_to_try:
-                    models_to_try.append(f"models/{cm}")
+        logger.debug(f'[AI] Raw response: {response_text[:500]}')
 
-        # Remove duplicates while preserving order
-        seen = set()
-        models_to_try = [m for m in models_to_try if m not in seen and not seen.add(m)]
+        result = self._parse_response(response_text)
+        if result and result.get("has_deadline"):
+            deadline_text = result.get("deadline_text", "")
+            confidence = result.get("confidence", 0.0)
 
-        for model_name in models_to_try:
-            try:
-                # Create a new client for this model if different from current
-                if model_name != self.model:
-                    logger.info(f'[AI] Trying model: {model_name}')
-                    client = genai.GenerativeModel(
-                        model_name=model_name,
-                            generation_config={
-                                "temperature": self.temperature,
-                                "max_output_tokens": 2048,  # Increased for comprehensive responses and accuracy
-                            },
-                    )
-                else:
-                    client = self.client
+            # --- CRITICAL VALIDATION ---
+            if not self._validate_extraction(text, deadline_text):
+                return None
 
-                def run_ai():
-                    """Execute AI call in thread."""
-                    try:
-                        response = client.generate_content(prompt)
-                        return response
-                    except Exception as e:
-                        logger.error(f'[AI] Gemini API error with {model_name}: {e}')
-                        raise
+            logger.success(f'[AI] Extracted: "{deadline_text}" (confidence: {confidence:.2f})')
+        else:
+            logger.debug('[AI] No deadline found in response')
 
-                try:
-                    future = self._executor.submit(run_ai)
-                    response = future.result(timeout=self.timeout_seconds)
-                except FutureTimeoutError:
-                    logger.warning(f'[AI] Timeout after {self.timeout_seconds}s with {model_name}')
-                    continue  # Try next model
-                except Exception as e:
-                    logger.warning(f'[AI] Model {model_name} failed: {e}')
-                    # If it's a 404 (model not found), try next model
-                    if "404" in str(e) or "not found" in str(e).lower():
-                        continue
-                    # For other errors, log and try next model
-                    continue
+        return result
 
-                # Success! Update current model if different
-                if model_name != self.model:
-                    logger.success(f'[AI] Switched to working model: {model_name}')
-                    self.model = model_name
-                    self.client = client
+    def _validate_extraction(self, original: str, extracted: str) -> bool:
+        """Validate that the AI extraction is consistent with the original text.
 
-                if not response or not response.text:
-                    logger.warning(f'[AI] Empty response from {model_name}')
-                    continue  # Try next model
+        Runs multiple sanity checks to catch hallucinated or incorrect extractions.
 
-                # Log full response for debugging
-                logger.debug(f'[AI] Full response from {model_name}: {response.text[:500]}')
+        Args:
+            original: Original message text
+            extracted: Extracted deadline text from AI
 
-                result = self._parse_response(response.text)
-                if result and result.get("has_deadline"):
-                    deadline_text = result.get("deadline_text", "")
-                    confidence = result.get("confidence", 0.0)
+        Returns:
+            True if extraction passes all checks
+        """
+        if not extracted:
+            return True  # No extraction to validate
 
-                    # CRITICAL VALIDATION: Multiple checks to ensure correct extraction
-                    original_upper = text.upper()
-                    extracted_upper = deadline_text.upper() if deadline_text else ""
-                    original_has_pm_am = 'PM' in original_upper or 'AM' in original_upper
-                    extracted_has_pm_am = 'PM' in extracted_upper or 'AM' in extracted_upper
+        original_upper = original.upper()
+        extracted_upper = extracted.upper()
+        original_has_pm_am = 'PM' in original_upper or 'AM' in original_upper
+        extracted_has_pm_am = 'PM' in extracted_upper or 'AM' in extracted_upper
 
-                    # Check for colon-separated time in original (e.g., "2:30", "14:30")
-                    original_has_colon_time = bool(re.search(r'\d{1,2}:\d{2}', text))
-                    extracted_has_colon_time = bool(re.search(r'\d{1,2}:\d{2}', deadline_text)) if deadline_text else False
+        original_has_colon_time = bool(re.search(r'\d{1,2}:\d{2}', original))
+        extracted_has_relative = any(
+            ind in extracted_upper
+            for ind in ['MIN', 'MINS', 'MINUTE', 'MINUTES', 'HOUR', 'HOURS',
+                        'HR', 'HRS', 'DAY', 'DAYS', 'WEEK', 'WEEKS']
+        )
 
-                    # Check for relative time indicators in extracted text
-                    relative_time_indicators = ['MIN', 'MINS', 'MINUTE', 'MINUTES', 'HOUR', 'HOURS', 'HR', 'HRS', 'DAY', 'DAYS', 'WEEK', 'WEEKS']
-                    extracted_has_relative = any(ind in extracted_upper for ind in relative_time_indicators)
+        # CHECK 1: Original has PM/AM but extracted doesn't
+        if original_has_pm_am and not extracted_has_pm_am:
+            logger.error(f'[AI] CRITICAL: Original "{original}" has PM/AM but extracted "{extracted}" does not — rejecting')
+            return False
 
-                    # CRITICAL CHECK 1: If original has PM/AM but extracted doesn't, it's a critical error
-                    if original_has_pm_am and not extracted_has_pm_am:
-                        logger.error(f'[AI] CRITICAL ERROR: Original text "{text}" contains PM/AM but extracted "{deadline_text}" does not! Rejecting extraction.')
-                        return None
+        # CHECK 2: Original has specific time but extracted is relative
+        if original_has_colon_time and extracted_has_relative:
+            logger.error(f'[AI] CRITICAL: Original "{original}" has specific time but extracted "{extracted}" is relative — rejecting')
+            return False
 
-                    # CRITICAL CHECK 2: If original has specific time (colon format like "2:30") but extracted is relative time, reject
-                    if original_has_colon_time and extracted_has_relative:
-                        logger.error(f'[AI] CRITICAL ERROR: Original text "{text}" contains specific time (colon format) but extracted "{deadline_text}" is relative time! Rejecting extraction.')
-                        return None
+        # CHECK 3: Original has "X:XX PM/AM" but extracted doesn't preserve time
+        if original_has_pm_am and original_has_colon_time:
+            match = re.search(r'(\d{1,2}):(\d{2})\s*(?:AM|PM)', original, re.IGNORECASE)
+            if match:
+                hour, minute = match.group(1), match.group(2)
+                if not (hour in extracted and minute in extracted):
+                    logger.error(f'[AI] CRITICAL: Original time "{match.group(0)}" not preserved in "{extracted}" — rejecting')
+                    return False
 
-                    # CRITICAL CHECK 3: If original has "X:XX PM/AM" pattern but extracted doesn't preserve the time
-                    if original_has_pm_am and original_has_colon_time:
-                        # Original has something like "2:30 PM", extracted should preserve this
-                        original_time_match = re.search(r'(\d{1,2}):(\d{2})\s*(?:AM|PM)', text, re.IGNORECASE)
-                        if original_time_match:
-                            original_hour = original_time_match.group(1)
-                            original_minute = original_time_match.group(2)
-                            # Check if extracted preserves the same time components
-                            if not (original_hour in deadline_text and original_minute in deadline_text):
-                                logger.error(f'[AI] CRITICAL ERROR: Original time "{original_time_match.group(0)}" not preserved in extracted "{deadline_text}"! Rejecting extraction.')
-                                return None
+        # CHECK 4: Validate key numbers preserved for relative time
+        original_numbers = re.findall(r'\d+', original)
+        extracted_numbers = re.findall(r'\d+', extracted)
+        relative_words_in_original = any(word in original.lower() for word in ['min', 'minute', 'hour', 'hr', 'day', 'week'])
 
-                    # CRITICAL CHECK 4: Validate that key numbers from original are preserved
-                    # Find all numbers in original text
-                    original_numbers = re.findall(r'\d+', text)
-                    extracted_numbers = re.findall(r'\d+', deadline_text) if deadline_text else []
+        if relative_words_in_original and original_numbers:
+            if extracted_has_pm_am:
+                logger.error(f'[AI] CRITICAL: Original "{original}" has relative time but extracted "{extracted}" has PM/AM — rejecting')
+                return False
 
-                    # For relative time patterns, check that the main number is preserved
-                    # E.g., "ETC 5 minutes" should extract something with "5" in it
-                    relative_words_in_original = any(word in text.lower() for word in ['min', 'minute', 'hour', 'hr', 'day', 'week'])
-                    if relative_words_in_original and original_numbers:
-                        # CRITICAL: If original has relative time (minutes/hours) but extracted has PM/AM, REJECT
-                        # Example: "3 minutes" should NOT become "3:30 PM"
-                        if extracted_has_pm_am:
-                            logger.error(f'[AI] CRITICAL ERROR: Original "{text}" has relative time (minutes/hours) but extracted "{deadline_text}" has PM/AM! Rejecting extraction.')
-                            return None
+            main_number = original_numbers[0]
+            for num in original_numbers:
+                if re.search(rf'{num}\s*(?:min|minute|hour|hr|day|week)', original.lower()):
+                    main_number = num
+                    break
 
-                        # Find the number closest to the relative time word
-                        main_number = original_numbers[0]  # Usually the first number
-                        for num in original_numbers:
-                            # Check if this number is directly before a time unit
-                            if re.search(rf'{num}\s*(?:min|minute|hour|hr|day|week)', text.lower()):
-                                main_number = num
-                                break
+            if main_number not in extracted_numbers:
+                logger.error(f'[AI] CRITICAL: Number "{main_number}" from "{original}" not in "{extracted}" — rejecting')
+                return False
 
-                        if main_number not in extracted_numbers:
-                            logger.error(f'[AI] CRITICAL ERROR: Original number "{main_number}" from "{text}" not found in extracted "{deadline_text}"! Rejecting extraction.')
-                            return None
+        # Warn (but don't reject) if extracted adds PM/AM that wasn't in original
+        if extracted_has_pm_am and not original_has_pm_am:
+            if '12' in original_upper and ('12 AM' in extracted_upper or '12 PM' in extracted_upper):
+                logger.debug(f'[AI] Context-aware AM/PM addition for "{original}" → "{extracted}"')
+            else:
+                logger.warning(f'[AI] Extracted "{extracted}" has PM/AM but original "{original}" does not')
 
-                    # If extracted has PM/AM but original doesn't (and it's not a context-aware addition), log warning
-                    if extracted_has_pm_am and not original_has_pm_am:
-                        # This is OK for context-aware additions like "12 AM" from "today 12"
-                        if '12' in original_upper and ('12 AM' in extracted_upper or '12 PM' in extracted_upper or 'MIDNIGHT' in extracted_upper or 'NOON' in extracted_upper):
-                            logger.debug(f'[AI] Context-aware addition of AM/PM for "{text}" → "{deadline_text}"')
-                        else:
-                            logger.warning(f'[AI] Extracted "{deadline_text}" has PM/AM but original "{text}" does not')
-
-                    logger.success(f'[AI] Extracted: "{deadline_text}" (confidence: {confidence:.2f})')
-                else:
-                    logger.debug('[AI] No deadline found in response')
-
-                return result
-
-            except Exception as e:
-                logger.warning(f'[AI] Failed to use model {model_name}: {e}')
-                continue  # Try next model
-
-        # All models failed
-        logger.error('[AI] All models failed - no deadline extracted')
-        return None
+        return True
 
     def _build_prompt(self, text: str, now: datetime) -> str:
         """Build a professional, comprehensive prompt for deadline extraction."""
@@ -740,71 +580,18 @@ RESPOND WITH JSON ONLY:"""
             logger.error(f"[AI] Parse error: {e}", exc=e)
             return None
 
-#     def rephrase_task(self, task_text: str) -> Optional[str]:
-#         """Rephrase a task message into a concise single sentence.
+    def rephrase_task(self, task_text: str) -> Optional[str]:
+        """Rephrase a task message into a concise single sentence.
 
-#         Uses Gemini to summarize and rephrase task messages for better readability.
-
-#         Args:
-#             task_text: Original task message text
-
-#         Returns:
-#             Rephrased task as single sentence, or original text if rephrasing fails
-#         """
-#         if not task_text:
-#             return None
-
-#         if not self.is_available():
-#             logger.debug('[Rephrase] AI not available, using original text')
-#             return task_text
-
-#         prompt = f"""Rephrase the following task message into a clear, concise single sentence summary.
-# Keep it professional and actionable. Maximum 15 words.
-
-# Task: {task_text}
-
-# Rephrased (single sentence, max 15 words):"""
-
-#         try:
-#             # Try to get response with timeout
-#             future = self._executor.submit(self._generate_with_client, prompt)
-#             try:
-#                 response_text = future.result(timeout=3)  # 3 second timeout for rephrasing
-#                 if response_text:
-#                     # Clean up the response
-#                     rephrased = response_text.strip().strip('"').strip("'")
-#                     logger.success(f'[Rephrase] "{task_text[:50]}..." -> "{rephrased}"')
-#                     return rephrased
-#                 else:
-#                     logger.warning('[Rephrase] Empty response from AI')
-#                     return task_text
-#             except FutureTimeoutError:
-#                 logger.warning('[Rephrase] Timeout, using original text')
-#                 return task_text
-#         except Exception as e:
-#             logger.warning(f'[Rephrase] Error: {e}, using original text')
-#             return task_text
-
-    def _generate_with_client(self, prompt: str) -> Optional[str]:
-        """Generate response using the AI client.
+        Delegates to GeminiService.rephrase_task().
 
         Args:
-            prompt: Prompt text
+            task_text: Original task message text
 
         Returns:
-            Generated text or None
+            Rephrased task as single sentence, or original text if rephrasing fails
         """
-        if not self.client:
-            return None
-
-        try:
-            response = self.client.generate_content(prompt)
-            if response and response.text:
-                return response.text.strip()
-            return None
-        except Exception as e:
-            logger.debug(f'[AI] Generation error: {e}')
-            return None
+        return self._gemini.rephrase_task(task_text)
 
     def __del__(self):
         """Cleanup executor on destruction."""

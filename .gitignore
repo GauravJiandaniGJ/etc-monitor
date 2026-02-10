@@ -36,7 +36,9 @@ logs/
 
 # Temporary files
 *.tmp
+tmp/
 *.bak
+*.backup
 *.cache
 
 # Test coverage

@@ -9,7 +9,7 @@ import os
 # Add parent directory to path to import modules
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from config.settings import Settings
+from src.config.settings import Settings
 from src.database.db_manager import DBManager
 from src.database.migrations.migration_manager import MigrationManager
 from src.utils.logger import get_logger, init_logger

@@ -2,7 +2,7 @@
 from flask import Blueprint, jsonify
 from src.database.db_manager import DBManager
 from slack_sdk import WebClient
-from config.settings import Settings
+from src.config.settings import Settings
 from src.utils.logger import get_logger
 
 
