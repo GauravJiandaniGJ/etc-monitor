@@ -121,41 +121,41 @@ function loadReminders() {
     document.getElementById('remindersTable').style.display = 'none';
 
     fetch('/api/reminders?limit=500')
-    .then(response => {
-        if (!response.ok) {
-            return response.json().then(err => {
-                throw new Error(err.error || 'Failed to load reminders');
-            }).catch(() => {
-                throw new Error('Failed to load reminders (HTTP ' + response.status + ')');
+        .then(response => {
+            if (!response.ok) {
+                return response.json().then(err => {
+                    throw new Error(err.error || 'Failed to load reminders');
+                }).catch(() => {
+                    throw new Error('Failed to load reminders (HTTP ' + response.status + ')');
+                });
+            }
+            return response.json();
+        })
+        .then(data => {
+            document.getElementById('loading').style.display = 'none';
+            document.getElementById('remindersTable').style.display = 'table';
+
+            const tbody = document.getElementById('remindersBody');
+            tbody.innerHTML = '';
+
+            if (!data.reminders || data.reminders.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;padding:40px;color:var(--text-muted);">No reminders found</td></tr>';
+                updateStats({ total: 0, pending: 0, sent: 0, cancelled: 0 });
+                return;
+            }
+
+            allReminders = data.reminders;
+            data.reminders.forEach(reminder => {
+                tbody.appendChild(createReminderRow(reminder));
             });
-        }
-        return response.json();
-    })
-    .then(data => {
-        document.getElementById('loading').style.display = 'none';
-        document.getElementById('remindersTable').style.display = 'table';
 
-        const tbody = document.getElementById('remindersBody');
-        tbody.innerHTML = '';
-
-        if (!data.reminders || data.reminders.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;padding:40px;color:var(--text-muted);">No reminders found</td></tr>';
-            updateStats({total: 0, pending: 0, sent: 0, cancelled: 0});
-            return;
-        }
-
-        allReminders = data.reminders;
-        data.reminders.forEach(reminder => {
-            tbody.appendChild(createReminderRow(reminder));
+            updateStats(data);
+        })
+        .catch(error => {
+            document.getElementById('loading').style.display = 'none';
+            document.getElementById('error').style.display = 'block';
+            document.getElementById('error').textContent = 'Error: ' + error.message;
         });
-
-        updateStats(data);
-    })
-    .catch(error => {
-        document.getElementById('loading').style.display = 'none';
-        document.getElementById('error').style.display = 'block';
-        document.getElementById('error').textContent = 'Error: ' + error.message;
-    });
 }
 
 function loadPendingReminders() {
@@ -163,26 +163,26 @@ function loadPendingReminders() {
     document.getElementById('pendingTable').style.display = 'none';
 
     fetch('/api/reminders?status=pending&limit=500')
-    .then(response => response.json())
-    .then(data => {
-        document.getElementById('loading-pending').style.display = 'none';
-        document.getElementById('pendingTable').style.display = 'table';
+        .then(response => response.json())
+        .then(data => {
+            document.getElementById('loading-pending').style.display = 'none';
+            document.getElementById('pendingTable').style.display = 'table';
 
-        const tbody = document.getElementById('pendingBody');
-        tbody.innerHTML = '';
+            const tbody = document.getElementById('pendingBody');
+            tbody.innerHTML = '';
 
-        if (!data.reminders || data.reminders.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;padding:40px;color:var(--text-muted);">No pending reminders</td></tr>';
-            return;
-        }
+            if (!data.reminders || data.reminders.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;padding:40px;color:var(--text-muted);">No pending reminders</td></tr>';
+                return;
+            }
 
-        data.reminders.forEach(reminder => {
-            const row = document.createElement('tr');
-            const messageText = reminder.deadline_text || '-';
-            const escapedMessage = escapeHtml(messageText);
-            const userName = formatUserName(reminder);
-            const channelName = formatChannelName(reminder);
-            row.innerHTML = `
+            data.reminders.forEach(reminder => {
+                const row = document.createElement('tr');
+                const messageText = reminder.deadline_text || '-';
+                const escapedMessage = escapeHtml(messageText);
+                const userName = formatUserName(reminder);
+                const channelName = formatChannelName(reminder);
+                row.innerHTML = `
                 <td>
                     <div class="user-badge">
                         <div class="user-avatar">${getUserInitial(reminder.user_id, reminder.user_name)}</div>
@@ -200,13 +200,13 @@ function loadPendingReminders() {
                     </div>
                 </td>
             `;
-            tbody.appendChild(row);
+                tbody.appendChild(row);
+            });
+        })
+        .catch(error => {
+            document.getElementById('loading-pending').style.display = 'none';
+            console.error('Error loading pending reminders:', error);
         });
-    })
-    .catch(error => {
-        document.getElementById('loading-pending').style.display = 'none';
-        console.error('Error loading pending reminders:', error);
-    });
 }
 
 function updateStats(data) {
@@ -237,25 +237,25 @@ function cancelReminder(id) {
     fetch('/api/reminders/' + encodeURIComponent(id) + '/cancel', {
         method: 'POST'
     })
-    .then(response => {
-        if (!response.ok) {
-            return response.json().then(err => {
-                throw new Error(err.error || 'Failed to cancel reminder');
-            });
-        }
-        return response.json();
-    })
-    .then(data => {
-        alert('Reminder cancelled successfully');
-        if (currentTab === 'pending') {
-            loadPendingReminders();
-        } else {
-            loadReminders();
-        }
-    })
-    .catch(error => {
-        alert('Error cancelling reminder: ' + (error.message || 'Unknown error'));
-    });
+        .then(response => {
+            if (!response.ok) {
+                return response.json().then(err => {
+                    throw new Error(err.error || 'Failed to cancel reminder');
+                });
+            }
+            return response.json();
+        })
+        .then(data => {
+            alert('Reminder cancelled successfully');
+            if (currentTab === 'pending') {
+                loadPendingReminders();
+            } else {
+                loadReminders();
+            }
+        })
+        .catch(error => {
+            alert('Error cancelling reminder: ' + (error.message || 'Unknown error'));
+        });
 }
 
 // Initialize theme
@@ -265,6 +265,8 @@ setTheme(storedTheme);
 // Load on page load
 loadReminders();
 
+// Set up periodic refresh
+setInterval(() => {
     if (currentTab === 'all') loadReminders();
     else loadPendingReminders();
 }, 10000);
@@ -286,24 +288,24 @@ document.addEventListener('DOMContentLoaded', () => {
             fetch('/api/reminders/trigger-eod', {
                 method: 'POST'
             })
-            .then(response => response.json())
-            .then(data => {
-                if (data.success) {
-                    alert(data.message);
-                    loadReminders(); // Refresh table
-                } else {
-                    alert('Error: ' + (data.error || 'Failed to run EOD check'));
-                }
-            })
-            .catch(error => {
-                console.error('Error triggering EOD check:', error);
-                alert('Error triggering EOD check. See console for details.');
-            })
-            .finally(() => {
-                eodBtn.disabled = false;
-                eodBtn.style.opacity = '1';
-                eodBtn.innerHTML = originalText;
-            });
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        alert(data.message);
+                        loadReminders(); // Refresh table
+                    } else {
+                        alert('Error: ' + (data.error || 'Failed to run EOD check'));
+                    }
+                })
+                .catch(error => {
+                    console.error('Error triggering EOD check:', error);
+                    alert('Error triggering EOD check. See console for details.');
+                })
+                .finally(() => {
+                    eodBtn.disabled = false;
+                    eodBtn.style.opacity = '1';
+                    eodBtn.innerHTML = originalText;
+                });
         });
     }
 });
