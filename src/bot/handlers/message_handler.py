@@ -1,7 +1,7 @@
 """Message handler for processing Slack messages - Production Optimized."""
 from typing import Callable
 from concurrent.futures import ThreadPoolExecutor
-from src.core.models import ReminderContext
+from src.core.models import ReminderContext, ReminderStatus
 from src.services.deadline_service import DeadlineService
 from src.services.reminder_service import ReminderService
 from src.services.notification_service import NotificationService
@@ -62,9 +62,50 @@ class MessageHandler:
             say: Slack Bolt say function for responding
         """
         try:
-            # Check if this is an edited message
+            # Check if this is an edited or deleted message
             subtype = event.get("subtype")
             is_edit = subtype == "message_changed"
+            is_delete = subtype == "message_deleted"
+
+            if is_delete:
+                # Handle message deletion
+                prev_message = event.get("previous_message", {})
+                deleted_ts = prev_message.get("ts")
+                channel_id = event.get("channel")
+                
+                if not deleted_ts or not channel_id:
+                    return
+
+                logger.info(f'Processing DELETED message: {deleted_ts} in channel {channel_id}')
+                
+                user_id = prev_message.get("user")
+                thread_ts = prev_message.get("thread_ts")
+                
+                if not user_id or not thread_ts:
+                    logger.debug('Could not find user_id or thread_ts in deleted message event')
+                    # Fallback: try to find by channel and ts only in DB
+                    query = "SELECT * FROM reminders WHERE channel_id = ? AND message_ts = ?"
+                    rows = self.reminder_service.reminder_repo.db.fetch_all(query, (channel_id, deleted_ts))
+                    if rows:
+                        reminder = self.reminder_service.reminder_repo._row_to_reminder(rows[0])
+                    else:
+                        return
+                else:
+                    reminder = self.reminder_service.reminder_repo.find_by_message(
+                        channel_id, thread_ts, user_id, deleted_ts
+                    )
+
+                if reminder and reminder.status == ReminderStatus.PENDING:
+                    logger.info(f'Cancelling reminder {reminder.id} due to message deletion')
+                    self.reminder_service.cancel(reminder.id, "system_deletion")
+                    self.scheduler.cancel(reminder.job_id)
+                    
+                    # Send cancellation notification to user
+                    try:
+                        self.notification_service.send_cancellation(reminder)
+                    except Exception as e:
+                        logger.warning(f'Failed to send cancellation notification: {e}')
+                return
 
             if is_edit:
                 # For edited messages, data is in event["message"]
@@ -233,6 +274,13 @@ class MessageHandler:
                 return
 
             logger.info(f'Sending reminder {reminder.id}')
+
+            # CRITICAL: Check current database status before sending
+            # This handles cases where reminder was cancelled in UI or via message deletion
+            current_reminder = self.reminder_service.get_reminder(reminder.id)
+            if not current_reminder or current_reminder.status != ReminderStatus.PENDING:
+                logger.info(f'Skipping reminder {reminder.id} - current status is {current_reminder.status if current_reminder else "deleted"}')
+                return
 
             success = self.notification_service.send_reminder(reminder)
 

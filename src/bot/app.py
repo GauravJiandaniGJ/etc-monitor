@@ -139,15 +139,21 @@ class SlackBot:
         # Message event handler - ONLY process thread replies (strict filtering)
         @self.app.event("message")
         def handle_message_event(body, event, say):
-            """Handle message events - ONLY thread replies (includes edited messages)."""
-            # Handle both new messages and edited messages
+            """Handle message events - thread replies, edits, and deletions."""
+            # Handle different message subtypes
             subtype = event.get("subtype")
             is_edit = subtype == "message_changed"
+            is_delete = subtype == "message_deleted"
 
-            logger.info(f'[APP] Received message event - subtype: {subtype}, is_edit: {is_edit}')
+            logger.info(f'[APP] Received message event - subtype: {subtype}, is_edit: {is_edit}, is_delete: {is_delete}')
 
-            # For edited messages, check thread_ts in event["message"]
-            # For new messages, check thread_ts directly in event
+            # Step 1: Route deletion events immediately (handler will check DB)
+            if is_delete:
+                logger.info('[APP] Deletion event - passing to message handler')
+                self.message_handler.handle_message(event, say)
+                return
+
+            # Step 2: Extract thread_ts for new/edited messages
             if is_edit:
                 message_data = event.get("message", {})
                 thread_ts = message_data.get("thread_ts")

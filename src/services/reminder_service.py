@@ -282,6 +282,11 @@ class ReminderService:
                 
         logger.success(f'Processed {count} EOD follow-ups')
         return count
+    def cancel(
+        self,
+        reminder_id: int,
+        cancelled_by: str
+    ) -> bool:
         """Cancel a reminder.
         
         Args:
