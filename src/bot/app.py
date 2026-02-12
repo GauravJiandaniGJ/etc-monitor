@@ -238,8 +238,8 @@ class SlackBot:
                 """Callback for daily EOD follow-up check."""
                 self._send_eod_followups()
 
-            self.scheduler.schedule_eod_check(eod_check_callback, hour=18, minute=0)
-            logger.info('Scheduled daily EOD check at 18:00 IST')
+            self.scheduler.schedule_eod_check(eod_check_callback, hour=19, minute=0)
+            logger.info('Scheduled daily EOD check at 19:00 IST')
 
             # Connect to Slack
             logger.info('Connecting to Slack via Socket Mode')
