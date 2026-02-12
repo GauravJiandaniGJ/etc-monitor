@@ -105,6 +105,13 @@ class MessageHandler:
             logger.info(f'  - Channel: {channel_id}')
             logger.info(f'  - Thread: {thread_ts}')
             logger.info(f'  - Message TS: {message_ts}')
+            
+            # Record user activity for EOD follow-up tracking
+            # We record activity for ANY thread reply, regardless of whether it contains an ETC
+            try:
+                self.reminder_service.record_user_activity(channel_id, thread_ts, user_id)
+            except Exception as e:
+                logger.warning(f'Failed to record user activity: {e}')
 
             # Step 2: Quick ETC indicator check
             has_etc = self.deadline_service.has_etc_indicator(text)

@@ -435,6 +435,27 @@ def get_audit_log(reminder_id: int):
         return jsonify({'error': str(e)}), 500
 
 
+@reminder_bp.route('/api/reminders/trigger-eod', methods=['POST'])
+def trigger_eod_check():
+    """Manually trigger EOD follow-up check."""
+    try:
+        if not _reminder_service or not _notification_service:
+            return jsonify({'error': 'Services not initialized'}), 500
+
+        logger.info('Manual EOD trigger requested via Admin API')
+        count = _reminder_service.process_eod_followups(_notification_service)
+        
+        return jsonify({
+            'success': True,
+            'message': f'EOD check complete. Sent {count} follow-up(s).',
+            'count': count
+        }), 200
+
+    except Exception as e:
+        logger.error(f'Error triggering EOD check: {e}', exc=e)
+        return jsonify({'error': str(e)}), 500
+
+
 def _format_reminder(reminder) -> dict:
     """Format reminder for JSON response."""
     return {

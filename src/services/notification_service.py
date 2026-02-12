@@ -244,6 +244,40 @@ class NotificationService:
             logger.error(f'Unexpected error sending cancellation: {e}')
             return False
 
+    def send_followup(self, reminder: Reminder) -> bool:
+        """Send EOD follow-up message.
+
+        Args:
+            reminder: Reminder to follow up on
+
+        Returns:
+            True if sent successfully
+        """
+        logger.info(f'Sending EOD follow-up for reminder {reminder.id}')
+
+        try:
+            message = (
+                f"👀 <@{reminder.user_id}> Update on this?\n*ETC:* {reminder.deadline_text or '—'}"
+            )
+
+            response = self.client.chat_postMessage(
+                channel=reminder.channel_id,
+                thread_ts=reminder.thread_ts,
+                text=message
+            )
+
+            if response["ok"]:
+                logger.success(f'Follow-up sent for reminder {reminder.id}')
+                return True
+            else:
+                error = response.get('error', 'Unknown error')
+                logger.error(f'Failed to send follow-up: {error}')
+                return False
+
+        except Exception as e:
+            logger.error(f'Error sending follow-up: {e}')
+            return False
+
     def resolve_user_name(self, user_id: str) -> str:
         """Resolve user ID to display name.
 

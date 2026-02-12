@@ -265,8 +265,45 @@ setTheme(storedTheme);
 // Load on page load
 loadReminders();
 
-// Auto-refresh every 10 seconds
-setInterval(() => {
     if (currentTab === 'all') loadReminders();
     else loadPendingReminders();
 }, 10000);
+
+// Trigger EOD Check Handler
+document.addEventListener('DOMContentLoaded', () => {
+    const eodBtn = document.getElementById('trigger-eod-btn');
+    if (eodBtn) {
+        eodBtn.addEventListener('click', () => {
+            if (!confirm('Are you sure you want to run the EOD check? This will send follow-up messages to users who haven\'t replied.')) {
+                return;
+            }
+
+            const originalText = eodBtn.innerHTML;
+            eodBtn.disabled = true;
+            eodBtn.style.opacity = '0.7';
+            eodBtn.innerHTML = 'Running...';
+
+            fetch('/api/reminders/trigger-eod', {
+                method: 'POST'
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    alert(data.message);
+                    loadReminders(); // Refresh table
+                } else {
+                    alert('Error: ' + (data.error || 'Failed to run EOD check'));
+                }
+            })
+            .catch(error => {
+                console.error('Error triggering EOD check:', error);
+                alert('Error triggering EOD check. See console for details.');
+            })
+            .finally(() => {
+                eodBtn.disabled = false;
+                eodBtn.style.opacity = '1';
+                eodBtn.innerHTML = originalText;
+            });
+        });
+    }
+});

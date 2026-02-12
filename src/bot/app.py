@@ -191,6 +191,11 @@ class SlackBot:
             """Handle /etc-summary command."""
             self.command_handler.handle_etc_summary(ack, respond, command)
 
+        @self.app.command("/trigger-eod")
+        def handle_trigger_eod_command(ack, respond, command):
+            """Handle /trigger-eod command."""
+            self.command_handler.handle_trigger_eod(ack, respond, command)
+
         logger.success('Event handlers registered')
 
     def start(self):
@@ -219,7 +224,16 @@ class SlackBot:
                 self._send_morning_summaries()
 
             self.scheduler.schedule_morning_summary(morning_summary_callback, hour=9, minute=0)
+            self.scheduler.schedule_morning_summary(morning_summary_callback, hour=9, minute=0)
             logger.info('Scheduled daily morning summary at 09:00 IST')
+
+            # Schedule EOD follow-up check at 7 PM IST
+            def eod_check_callback():
+                """Callback for daily EOD follow-up check."""
+                self._send_eod_followups()
+
+            self.scheduler.schedule_eod_check(eod_check_callback, hour=19, minute=0)
+            logger.info('Scheduled daily EOD check at 19:00 IST')
 
             # Connect to Slack
             logger.info('Connecting to Slack via Socket Mode')
@@ -280,6 +294,18 @@ class SlackBot:
 
         except Exception as e:
             logger.error(f'Error sending morning summaries: {e}', exc=e)
+
+    def _send_eod_followups(self):
+        """Send EOD follow-ups for unresponsive users.
+
+        Checks for reminders that were sent but haven't received a response.
+        """
+        try:
+            logger.info('Starting scheduled EOD follow-up check')
+            self.reminder_service.process_eod_followups(self.notification_service)
+
+        except Exception as e:
+            logger.error(f'Error sending EOD follow-ups: {e}', exc=e)
 
     def stop(self):
         """Stop the bot.

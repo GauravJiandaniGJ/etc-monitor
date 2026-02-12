@@ -301,3 +301,48 @@ class ReminderScheduler:
         except Exception as e:
             logger.error(f'Error scheduling morning summary: {e}')
             return False
+
+    def schedule_eod_check(
+        self,
+        callback: Callable,
+        hour: int = 19,
+        minute: int = 0
+    ) -> bool:
+        """Schedule daily EOD follow-up check.
+
+        Args:
+            callback: Callback function to execute daily
+            hour: Hour of day (default 19 for 7 PM)
+            minute: Minute of hour
+
+        Returns:
+            True if scheduled successfully
+        """
+        try:
+            job_id = 'eod_followup_daily'
+
+            # Check if job already exists and remove it
+            existing_job = self.get_job(job_id)
+            if existing_job:
+                logger.info(f'Removing existing EOD check job {job_id}')
+                self.cancel(job_id)
+
+            # Schedule daily job at specified time in IST
+            self.scheduler.add_job(
+                callback,
+                'cron',
+                hour=hour,
+                minute=minute,
+                timezone=IST,
+                id=job_id,
+                replace_existing=True
+            )
+
+            logger.success(
+                f'Scheduled EOD check job to run daily at {hour:02d}:{minute:02d}'
+            )
+            return True
+
+        except Exception as e:
+            logger.error(f'Error scheduling EOD check: {e}')
+            return False

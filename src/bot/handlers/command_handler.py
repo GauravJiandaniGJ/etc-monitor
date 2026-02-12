@@ -331,3 +331,20 @@ class CommandHandler:
         except Exception as e:
             logger.error(f'Error handling /etc-summary: {e}', exc=e)
             respond("Error: Failed to generate summary. Please try again later.")
+
+    def handle_trigger_eod(self, ack, respond, command):
+        """Handle /trigger-eod command."""
+        ack()
+        user_id = command.get('user_id')
+        logger.info(f'Manual EOD trigger requested by {user_id}')
+        
+        try:
+            count = self.reminder_service.process_eod_followups(self.notification_service)
+            if count > 0:
+                respond(f"✅ EOD Check Complete: Sent {count} follow-up(s).")
+            else:
+                respond("✅ EOD Check Complete: No pending follow-ups found.")
+                
+        except Exception as e:
+            logger.error(f'Error executing manual EOD trigger: {e}')
+            respond(f"❌ Error triggering EOD check: {str(e)}")

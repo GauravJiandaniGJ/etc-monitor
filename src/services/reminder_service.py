@@ -188,8 +188,100 @@ class ReminderService:
 
         # Return updated reminder
         return self.reminder_repo.get_by_id(existing.id)
+        # Return updated reminder
+        return self.reminder_repo.get_by_id(existing.id)
+
+    def record_user_activity(
+        self,
+        channel_id: str,
+        thread_ts: str,
+        user_id: str
+    ):
+        """Record user activity in a thread.
+
+        If there is a sent reminder for this thread/user, update the
+        last_user_update_at timestamp to track responsiveness.
+
+        Args:
+            channel_id: Channel ID
+            thread_ts: Thread timestamp
+            user_id: User who replied
+        """
+        # Find active reminder for this context (even if status is SENT)
+        # We need a custom query or strict logic here.
+        # find_existing_active only looks for pending/rescheduled.
+        # We need to find 'sent' reminders too for tracking updates.
+        
+        # Let's use get_by_composite_key but check status
+        reminder = self.reminder_repo.get_by_composite_key(channel_id, thread_ts, user_id)
+        
+        if reminder and reminder.status == ReminderStatus.SENT:
+            if reminder.reminder_sent_at:
+                logger.info(f'Recording user activity for reminder {reminder.id}')
+                self.reminder_repo.update(reminder.id, {
+                    'last_user_update_at': now_ist()
+                })
     
-    def cancel(self, reminder_id: int, cancelled_by: str) -> bool:
+    def get_pending_followups(self) -> List[Reminder]:
+        """Get reminders needing EOD follow-up.
+        
+        Returns:
+            List of reminders
+        """
+        return self.reminder_repo.get_pending_followups()
+    
+    def mark_followup_sent(self, reminder_id: int) -> bool:
+        """Mark EOD follow-up as sent.
+        
+        Args:
+            reminder_id: Reminder ID
+            
+        Returns:
+            True if successful
+        """
+        logger.info(f'Marking follow-up sent for reminder {reminder_id}')
+        
+        success = self.reminder_repo.update(reminder_id, {
+            'followup_sent_at': now_ist()
+        })
+        
+        if success:
+             audit = AuditLog(
+                reminder_id=reminder_id,
+                action=AuditAction.SENT,  # Reuse SENT action or add FOLLOWUP
+                performed_by='system',
+                performed_at=now_ist(),
+                metadata={'type': 'eod_followup'}
+            )
+             self.audit_repo.log(audit)
+             
+        return success
+
+    def process_eod_followups(self, notification_service) -> int:
+        """Process EOD follow-ups using provided notification service.
+        
+        Args:
+            notification_service: Service to send notifications
+            
+        Returns:
+            Number of follow-ups sent
+        """
+        followups = self.get_pending_followups()
+        count = 0
+        
+        if not followups:
+            logger.info('No pending EOD follow-ups found')
+            return 0
+            
+        logger.info(f'Processing {len(followups)} EOD follow-ups')
+        
+        for reminder in followups:
+            if notification_service.send_followup(reminder):
+                self.mark_followup_sent(reminder.id)
+                count += 1
+                
+        logger.success(f'Processed {count} EOD follow-ups')
+        return count
         """Cancel a reminder.
         
         Args:

@@ -47,6 +47,9 @@ class Reminder:
     retry_count: int = 0
     reschedule_count: int = 0
     previous_deadline: Optional[datetime] = None
+    reminder_sent_at: Optional[datetime] = None
+    last_user_update_at: Optional[datetime] = None
+    followup_sent_at: Optional[datetime] = None
     
     @property
     def composite_key(self) -> str:

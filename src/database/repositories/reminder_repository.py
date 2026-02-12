@@ -44,8 +44,8 @@ class ReminderRepository:
                     channel_id, thread_ts, user_id, message_ts,
                     original_message, deadline_text, deadline_datetime,
                     reminder_datetime, status, retry_count, reschedule_count,
-                    previous_deadline
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    previous_deadline, reminder_sent_at, last_user_update_at, followup_sent_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 RETURNING id
             '''
         else:
@@ -54,8 +54,8 @@ class ReminderRepository:
                     channel_id, thread_ts, user_id, message_ts,
                     original_message, deadline_text, deadline_datetime,
                     reminder_datetime, status, retry_count, reschedule_count,
-                    previous_deadline
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    previous_deadline, reminder_sent_at, last_user_update_at, followup_sent_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             '''
 
         params = (
@@ -70,7 +70,10 @@ class ReminderRepository:
             reminder.status.value,
             reminder.retry_count,
             reminder.reschedule_count,
-            self._datetime_to_str(reminder.previous_deadline)
+            self._datetime_to_str(reminder.previous_deadline),
+            self._datetime_to_str(reminder.reminder_sent_at),
+            self._datetime_to_str(reminder.last_user_update_at),
+            self._datetime_to_str(reminder.followup_sent_at)
         )
 
         # For PostgreSQL/MySQL, use RETURNING to get the ID
@@ -191,6 +194,29 @@ class ReminderRepository:
             SELECT * FROM reminders
             WHERE status = 'pending'
             ORDER BY reminder_datetime ASC
+        '''
+        rows = self.db.fetch_all(query)
+        return [self._row_to_reminder(row) for row in rows]
+
+    def get_pending_followups(self) -> List[Reminder]:
+        """Get reminders that need EOD follow-up.
+        
+        Criteria:
+        - Status is 'sent'
+        - Reminder was sent (reminder_sent_at IS NOT NULL)
+        - Follow-up not yet sent (followup_sent_at IS NULL)
+        - User hasn't replied since reminder (last_user_update_at IS NULL OR < reminder_sent_at)
+        
+        Returns:
+            List of reminders needing follow-up
+        """
+        query = '''
+            SELECT * FROM reminders
+            WHERE status = 'sent'
+            AND (reminder_sent_at IS NOT NULL OR sent_at IS NOT NULL)
+            AND followup_sent_at IS NULL
+            AND (last_user_update_at IS NULL OR last_user_update_at < COALESCE(reminder_sent_at, sent_at))
+            ORDER BY created_at ASC
         '''
         rows = self.db.fetch_all(query)
         return [self._row_to_reminder(row) for row in rows]
@@ -325,6 +351,8 @@ class ReminderRepository:
             # datetime.now() is never None, so _datetime_to_str should never return None
             sent_at_str = self._datetime_to_str(datetime.now())
             updates['sent_at'] = sent_at_str or datetime.now().isoformat()
+            # Also update reminder_sent_at for EOD tracking
+            updates['reminder_sent_at'] = updates['sent_at']
 
         return self.update(reminder_id, updates)
 
@@ -484,7 +512,10 @@ class ReminderRepository:
             sent_at=self._str_to_datetime(row['sent_at']),
             retry_count=row['retry_count'],
             reschedule_count=row['reschedule_count'],
-            previous_deadline=self._str_to_datetime(row['previous_deadline'])
+            previous_deadline=self._str_to_datetime(row['previous_deadline']),
+            reminder_sent_at=self._str_to_datetime(row.get('reminder_sent_at')),
+            last_user_update_at=self._str_to_datetime(row.get('last_user_update_at')),
+            followup_sent_at=self._str_to_datetime(row.get('followup_sent_at'))
         )
 
     @staticmethod
