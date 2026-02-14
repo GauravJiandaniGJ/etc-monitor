@@ -255,10 +255,12 @@ class NotificationService:
         """
         logger.info(f'Sending EOD follow-up for reminder {reminder.id}')
 
+        if not reminder.thread_ts or len(reminder.thread_ts) <= 10 or '.' not in reminder.thread_ts:
+            logger.error(f'Invalid thread_ts for reminder {reminder.id} follow-up - CANNOT send outside thread')
+            return False
+
         try:
-            message = (
-                f"👀 <@{reminder.user_id}> Update on this?\n*ETC:* {reminder.deadline_text or '—'}"
-            )
+            message = f"👀 <@{reminder.user_id}> Update on this?\n*ETC:* {reminder.deadline_text or '—'}"
 
             response = self.client.chat_postMessage(
                 channel=reminder.channel_id,

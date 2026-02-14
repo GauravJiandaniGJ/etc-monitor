@@ -186,9 +186,6 @@ class ReminderService:
 
         logger.success(f'Updated reminder {existing.id}: {format_datetime_friendly(old_deadline)} -> {format_datetime_friendly(deadline.deadline_datetime)}')
 
-        # Return updated reminder
-        return self.reminder_repo.get_by_id(existing.id)
-        # Return updated reminder
         return self.reminder_repo.get_by_id(existing.id)
 
     def record_user_activity(
@@ -197,30 +194,30 @@ class ReminderService:
         thread_ts: str,
         user_id: str
     ):
-        """Record user activity in a thread.
+        """Record that the user has replied in a thread after a reminder was sent.
 
-        If there is a sent reminder for this thread/user, update the
-        last_user_update_at timestamp to track responsiveness.
+        Only updates last_user_update_at when:
+        - The reminder status is SENT
+        - The reminder was actually sent (reminder_sent_at or sent_at is set)
 
         Args:
             channel_id: Channel ID
             thread_ts: Thread timestamp
             user_id: User who replied
         """
-        # Find active reminder for this context (even if status is SENT)
-        # We need a custom query or strict logic here.
-        # find_existing_active only looks for pending/rescheduled.
-        # We need to find 'sent' reminders too for tracking updates.
-        
-        # Let's use get_by_composite_key but check status
         reminder = self.reminder_repo.get_by_composite_key(channel_id, thread_ts, user_id)
-        
-        if reminder and reminder.status == ReminderStatus.SENT:
-            if reminder.reminder_sent_at:
-                logger.info(f'Recording user activity for reminder {reminder.id}')
-                self.reminder_repo.update(reminder.id, {
-                    'last_user_update_at': now_ist()
-                })
+
+        if not reminder or reminder.status != ReminderStatus.SENT:
+            return
+
+        sent_at = reminder.reminder_sent_at or reminder.sent_at
+        if not sent_at:
+            return
+
+        logger.info(f'Recording user activity for reminder {reminder.id}')
+        self.reminder_repo.update(reminder.id, {
+            'last_user_update_at': now_ist()
+        })
     
     def get_pending_followups(self) -> List[Reminder]:
         """Get reminders needing EOD follow-up.
@@ -246,15 +243,15 @@ class ReminderService:
         })
         
         if success:
-             audit = AuditLog(
+            audit = AuditLog(
                 reminder_id=reminder_id,
-                action=AuditAction.SENT,  # Reuse SENT action or add FOLLOWUP
+                action=AuditAction.SENT,
                 performed_by='system',
                 performed_at=now_ist(),
                 metadata={'type': 'eod_followup'}
             )
-             self.audit_repo.log(audit)
-             
+            self.audit_repo.log(audit)
+
         return success
 
     def process_eod_followups(self, notification_service) -> int:
@@ -282,6 +279,7 @@ class ReminderService:
                 
         logger.success(f'Processed {count} EOD follow-ups')
         return count
+
     def cancel(
         self,
         reminder_id: int,

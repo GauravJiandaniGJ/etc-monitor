@@ -200,22 +200,27 @@ class ReminderRepository:
 
     def get_pending_followups(self) -> List[Reminder]:
         """Get reminders that need EOD follow-up.
-        
+
         Criteria:
         - Status is 'sent'
-        - Reminder was sent (reminder_sent_at IS NOT NULL)
+        - Reminder was sent within the last 24 hours
         - Follow-up not yet sent (followup_sent_at IS NULL)
-        - User hasn't replied since reminder (last_user_update_at IS NULL OR < reminder_sent_at)
-        
+        - User has not replied after the reminder was sent
+          (last_user_update_at IS NULL OR <= reminder_sent_at)
+
         Returns:
             List of reminders needing follow-up
         """
         query = '''
             SELECT * FROM reminders
             WHERE status = 'sent'
-            AND (reminder_sent_at IS NOT NULL OR sent_at IS NOT NULL)
+            AND COALESCE(reminder_sent_at, sent_at) IS NOT NULL
             AND followup_sent_at IS NULL
-            AND (last_user_update_at IS NULL OR last_user_update_at < COALESCE(reminder_sent_at, sent_at))
+            AND COALESCE(reminder_sent_at, sent_at) >= datetime('now', '-24 hours')
+            AND (
+                last_user_update_at IS NULL
+                OR last_user_update_at <= COALESCE(reminder_sent_at, sent_at)
+            )
             ORDER BY created_at ASC
         '''
         rows = self.db.fetch_all(query)
