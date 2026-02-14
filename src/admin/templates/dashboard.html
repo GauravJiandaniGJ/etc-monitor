@@ -17,6 +17,16 @@
                 <span>ETC Monitor</span>
             </div>
             <div class="header-right">
+                <button id="bot-toggle-btn"
+                    style="margin-right: 12px; padding: 6px 12px; background: var(--danger); color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 0.9rem; font-weight: 500; display: flex; align-items: center; gap: 6px;"
+                    title="Pause Bot">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                        stroke-linecap="round" stroke-linejoin="round">
+                        <rect x="6" y="4" width="4" height="16"></rect>
+                        <rect x="14" y="4" width="4" height="16"></rect>
+                    </svg>
+                    Pause Bot
+                </button>
                 <button id="trigger-eod-btn"
                     style="margin-right: 12px; padding: 6px 12px; background: var(--warning); color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 0.9rem; font-weight: 500; display: flex; align-items: center; gap: 6px;"
                     title="Trigger EOD Check">
@@ -34,9 +44,9 @@
                             stroke-linecap="round" stroke-linejoin="round" />
                     </svg>
                 </button>
-                <div class="status-indicator">
-                    <div class="status-dot"></div>
-                    <span>System Online</span>
+                <div class="status-indicator" id="bot-status-indicator">
+                    <div class="status-dot" id="bot-status-dot"></div>
+                    <span id="bot-status-text">Bot Running</span>
                 </div>
             </div>
         </header>

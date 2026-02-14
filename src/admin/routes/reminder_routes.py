@@ -3,6 +3,7 @@ from flask import Blueprint, jsonify, request
 from typing import Optional
 from functools import wraps
 import time
+import os
 from datetime import datetime
 from src.database.db_manager import DBManager
 from src.database.repositories.reminder_repository import ReminderRepository
@@ -453,6 +454,42 @@ def trigger_eod_check():
 
     except Exception as e:
         logger.error(f'Error triggering EOD check: {e}', exc=e)
+        return jsonify({'error': str(e)}), 500
+
+
+_BOT_PAUSE_FLAG = os.path.join(os.path.dirname(__file__), '..', '..', '..', '.bot_paused')
+
+
+@reminder_bp.route('/api/bot/status', methods=['GET'])
+def bot_status():
+    """Get current bot pause/resume status."""
+    paused = os.path.exists(_BOT_PAUSE_FLAG)
+    return jsonify({'paused': paused, 'status': 'paused' if paused else 'running'}), 200
+
+
+@reminder_bp.route('/api/bot/pause', methods=['POST'])
+def pause_bot():
+    """Pause the bot (stops processing new Slack messages)."""
+    try:
+        with open(_BOT_PAUSE_FLAG, 'w') as f:
+            f.write('paused')
+        logger.info('Bot paused via admin panel')
+        return jsonify({'success': True, 'status': 'paused'}), 200
+    except Exception as e:
+        logger.error(f'Error pausing bot: {e}', exc=e)
+        return jsonify({'error': str(e)}), 500
+
+
+@reminder_bp.route('/api/bot/resume', methods=['POST'])
+def resume_bot():
+    """Resume the bot (resumes processing Slack messages)."""
+    try:
+        if os.path.exists(_BOT_PAUSE_FLAG):
+            os.remove(_BOT_PAUSE_FLAG)
+        logger.info('Bot resumed via admin panel')
+        return jsonify({'success': True, 'status': 'running'}), 200
+    except Exception as e:
+        logger.error(f'Error resuming bot: {e}', exc=e)
         return jsonify({'error': str(e)}), 500
 
 

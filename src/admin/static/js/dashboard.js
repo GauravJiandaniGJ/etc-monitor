@@ -269,10 +269,87 @@ loadReminders();
 setInterval(() => {
     if (currentTab === 'all') loadReminders();
     else loadPendingReminders();
+    loadBotStatus();
 }, 10000);
+
+// Bot pause/resume state
+let botIsPaused = false;
+
+function updateBotToggleUI(paused) {
+    botIsPaused = paused;
+    const btn = document.getElementById('bot-toggle-btn');
+    const statusDot = document.getElementById('bot-status-dot');
+    const statusText = document.getElementById('bot-status-text');
+    if (!btn) return;
+
+    if (paused) {
+        btn.style.background = 'var(--success)';
+        btn.title = 'Resume Bot';
+        btn.innerHTML = `
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                stroke-linecap="round" stroke-linejoin="round">
+                <polygon points="5 3 19 12 5 21 5 3"></polygon>
+            </svg>
+            Resume Bot`;
+        if (statusDot) statusDot.style.background = 'var(--warning)';
+        if (statusText) statusText.textContent = 'Bot Paused';
+    } else {
+        btn.style.background = 'var(--danger)';
+        btn.title = 'Pause Bot';
+        btn.innerHTML = `
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                stroke-linecap="round" stroke-linejoin="round">
+                <rect x="6" y="4" width="4" height="16"></rect>
+                <rect x="14" y="4" width="4" height="16"></rect>
+            </svg>
+            Pause Bot`;
+        if (statusDot) statusDot.style.background = '';
+        if (statusText) statusText.textContent = 'Bot Running';
+    }
+}
+
+function loadBotStatus() {
+    fetch('/api/bot/status')
+        .then(response => response.json())
+        .then(data => updateBotToggleUI(data.paused))
+        .catch(() => {}); // silently ignore if admin panel not available
+}
 
 // Trigger EOD Check Handler
 document.addEventListener('DOMContentLoaded', () => {
+    loadBotStatus();
+
+    const botToggleBtn = document.getElementById('bot-toggle-btn');
+    if (botToggleBtn) {
+        botToggleBtn.addEventListener('click', () => {
+            const action = botIsPaused ? 'resume' : 'pause';
+            const confirmMsg = botIsPaused
+                ? 'Resume the bot? It will start processing Slack messages again.'
+                : 'Pause the bot? It will stop processing new Slack messages until resumed.';
+            if (!confirm(confirmMsg)) return;
+
+            botToggleBtn.disabled = true;
+            botToggleBtn.style.opacity = '0.7';
+
+            fetch('/api/bot/' + action, { method: 'POST' })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        updateBotToggleUI(data.status === 'paused');
+                    } else {
+                        alert('Error: ' + (data.error || 'Failed to ' + action + ' bot'));
+                    }
+                })
+                .catch(error => {
+                    alert('Error: ' + (error.message || 'Failed to ' + action + ' bot'));
+                })
+                .finally(() => {
+                    botToggleBtn.disabled = false;
+                    botToggleBtn.style.opacity = '1';
+                });
+        });
+    }
+
     const eodBtn = document.getElementById('trigger-eod-btn');
     if (eodBtn) {
         eodBtn.addEventListener('click', () => {

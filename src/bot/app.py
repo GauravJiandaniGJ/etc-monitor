@@ -1,4 +1,5 @@
 """Slack bot application entry point."""
+import os
 from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 from slack_sdk import WebClient
@@ -25,6 +26,9 @@ from src.utils.logger import get_logger, init_logger
 
 
 logger = get_logger('SlackBot')
+
+# Flag file written by admin panel to pause message processing
+_BOT_PAUSE_FLAG = os.path.join(os.path.dirname(__file__), '..', '..', '.bot_paused')
 
 
 class SlackBot:
@@ -140,6 +144,11 @@ class SlackBot:
         @self.app.event("message")
         def handle_message_event(body, event, say):
             """Handle message events - thread replies, edits, and deletions."""
+            # Check if bot is paused via admin panel
+            if os.path.exists(_BOT_PAUSE_FLAG):
+                logger.info('[APP] Bot is paused - skipping message event')
+                return
+
             # Handle different message subtypes
             subtype = event.get("subtype")
             is_edit = subtype == "message_changed"
