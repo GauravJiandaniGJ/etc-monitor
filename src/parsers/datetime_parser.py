@@ -73,15 +73,17 @@ class DateTimeParser:
             logger.success(f'Parsed "{text}" -> {result}')
             return result
 
-        result = self._parse_time_of_day(text_lower, now)
-        if result:
-            logger.info(f'Matched time of day for: "{text_lower}"')
-            logger.success(f'Parsed "{text}" -> {result}')
-            return result
-
+        # IMPORTANT: Check specific date BEFORE time-of-day to handle "26th Feb 11am" correctly
+        # Otherwise time-of-day would match just "11am" and ignore the date
         result = self._parse_specific_date(text_lower, now)
         if result:
             logger.info(f'Matched specific date for: "{text_lower}"')
+            logger.success(f'Parsed "{text}" -> {result}')
+            return result
+
+        result = self._parse_time_of_day(text_lower, now)
+        if result:
+            logger.info(f'Matched time of day for: "{text_lower}"')
             logger.success(f'Parsed "{text}" -> {result}')
             return result
 
@@ -583,6 +585,33 @@ class DateTimeParser:
             'jul': 7, 'aug': 8, 'sep': 9, 'oct': 10, 'nov': 11, 'dec': 12
         }
 
+        # Helper function to extract time from text
+        def extract_time_from_text(text: str):
+            """Extract time (hour, minute) from text, avoiding date numbers."""
+            time_patterns = [
+                # Time immediately followed by am/pm (no space): "11am", "11:30am"
+                r'(?:^|[^\d])(\d{1,2})(?::(\d{2}))?(am|pm)(?:[^\w]|$)',
+                # Time with space before am/pm: "11 am", "11:30 am"
+                r'(?:^|[^\d])(\d{1,2})(?::(\d{2}))?\s+(am|pm)(?:[^\w]|$)',
+                # Time after "at": "at 11am", "at 11:30 pm"
+                r'at\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)',
+            ]
+
+            for pattern in time_patterns:
+                time_match = re.search(pattern, text, re.IGNORECASE)
+                if time_match:
+                    hour = int(time_match.group(1))
+                    minute = int(time_match.group(2)) if time_match.group(2) else 0
+                    period = time_match.group(3).lower()
+
+                    if period == 'pm' and hour != 12:
+                        hour += 12
+                    elif period == 'am' and hour == 12:
+                        hour = 0
+
+                    return hour, minute
+            return None, None
+
         # Try: "15th Jan" or "15 Jan"
         for month_name, month_num in month_map.items():
             match = re.search(rf'(\d{{1,2}})(?:st|nd|rd|th)?\s+{month_name}', text)
@@ -599,18 +628,32 @@ class DateTimeParser:
                 except ValueError:
                     continue
 
-                # Check for time in the text
-                time_match = re.search(r'(\d{1,2})(?::(\d{2}))?\s*(am|pm)', text)
-                if time_match:
-                    hour = int(time_match.group(1))
-                    minute = int(time_match.group(2)) if time_match.group(2) else 0
-                    period = time_match.group(3)
+                # Check for time in the text using helper function
+                hour, minute = extract_time_from_text(text)
+                if hour is not None:
+                    target_date = target_date.replace(hour=hour, minute=minute)
 
-                    if period == 'pm' and hour != 12:
-                        hour += 12
-                    elif period == 'am' and hour == 12:
-                        hour = 0
+                return target_date
 
+        # Try: "Jan 15" or "Feb 26" (Month Day format)
+        for month_name, month_num in month_map.items():
+            match = re.search(rf'{month_name}\s+(\d{{1,2}})(?:st|nd|rd|th)?(?:\s|$|,)', text)
+            if match:
+                day = int(match.group(1))
+
+                # Determine year (this year or next year)
+                year = now.year
+                try:
+                    target_date = now.replace(year=year, month=month_num, day=day,
+                                             hour=17, minute=0, second=0, microsecond=0)
+                    if target_date < now:
+                        target_date = target_date.replace(year=year + 1)
+                except ValueError:
+                    continue
+
+                # Check for time in the text using helper function
+                hour, minute = extract_time_from_text(text)
+                if hour is not None:
                     target_date = target_date.replace(hour=hour, minute=minute)
 
                 return target_date

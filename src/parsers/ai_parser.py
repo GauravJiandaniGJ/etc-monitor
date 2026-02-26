@@ -395,6 +395,22 @@ Output: {{"has_deadline": true, "deadline_text": "Friday 5PM", "confidence": 0.9
 Input: "Will complete by Monday morning"
 Output: {{"has_deadline": true, "deadline_text": "Monday morning", "confidence": 0.95, "intent": "new"}}
 
+SPECIFIC DATE EXAMPLES (CRITICAL - PRESERVE EXACT DATE):
+Input: "ETC 26th Feb 11am"
+Output: {{"has_deadline": true, "deadline_text": "26th Feb 11am", "confidence": 0.95, "intent": "new"}}
+
+Input: "ETC 15th Jan 3pm"
+Output: {{"has_deadline": true, "deadline_text": "15th Jan 3pm", "confidence": 0.95, "intent": "new"}}
+
+Input: "ETC Feb 26 11am"
+Output: {{"has_deadline": true, "deadline_text": "Feb 26 11am", "confidence": 0.95, "intent": "new"}}
+
+Input: "ETC 1st March 9:30am"
+Output: {{"has_deadline": true, "deadline_text": "1st March 9:30am", "confidence": 0.95, "intent": "new"}}
+
+Input: "ETC by 28th Feb 5PM"
+Output: {{"has_deadline": true, "deadline_text": "28th Feb 5PM", "confidence": 0.95, "intent": "new"}}
+
 TIME OF DAY EXAMPLES:
 Input: "ETC evening"
 Output: {{"has_deadline": true, "deadline_text": "evening", "confidence": 0.90, "intent": "new"}}
