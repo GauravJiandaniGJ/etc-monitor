@@ -245,3 +245,16 @@ class TestRealWorldExamples:
         message = "Will finish by EOD"
         # This doesn't have "ETC" keyword
         assert matcher.has_etc_indicator(message) is False
+
+    @pytest.mark.parametrize("message, expected", [
+        ("ETC 3 October 10AM", "3 october 10am"),
+        ("ETC 3rd October at 10 AM", "3rd october at 10 am"),
+        ("ETC October 3 10AM", "october 3 10am"),
+        ("ETC 3 Oct 10AM", "3 oct 10am"),
+    ])
+    def test_full_month_name_keeps_time(self, matcher, message, expected):
+        """Test: 'ETC 3 October 10AM' keeps the time instead of matching only '3 oct'."""
+        assert matcher.has_etc_indicator(message) is True
+        result = matcher.find_first_match(matcher.extract_deadline_text(message))
+        assert result is not None
+        assert result[1] == expected

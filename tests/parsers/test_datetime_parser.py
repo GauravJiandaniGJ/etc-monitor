@@ -344,3 +344,42 @@ class TestRealWorldExamples:
         assert result is not None
         assert result.hour == 15
         assert result.minute == 30
+
+
+class TestFullMonthNames:
+    """Dates written with full month names keep both the date and the time."""
+
+    @pytest.fixture
+    def parser(self):
+        """Create DateTimeParser instance."""
+        return DateTimeParser()
+
+    @pytest.fixture
+    def now(self):
+        """A fixed reference time well before the parsed dates."""
+        return IST.localize(datetime(2026, 9, 20, 12, 0))
+
+    @pytest.mark.parametrize("text", [
+        "3 October 10AM",
+        "3rd October at 10 AM",
+        "October 3 10am",
+        "Oct 3 10am",
+    ])
+    def test_day_and_time_kept(self, parser, now, text):
+        """Test: 'ETC 3 October 10AM' resolves to 3 Oct, 10:00 IST (not 5 PM)."""
+        result = parser.parse(text, reference_time=now)
+        assert result is not None
+        assert (result.year, result.month, result.day) == (2026, 10, 3)
+        assert (result.hour, result.minute) == (10, 0)
+
+    def test_sept_abbreviation(self, parser, now):
+        """Test: 'Sept 25 9:30am'"""
+        result = parser.parse("Sept 25 9:30am", reference_time=now)
+        assert result is not None
+        assert (result.month, result.day, result.hour, result.minute) == (9, 25, 9, 30)
+
+    def test_date_without_time_defaults_to_5pm(self, parser, now):
+        """Test: '3 October' with no time still defaults to 5 PM."""
+        result = parser.parse("3 October", reference_time=now)
+        assert result is not None
+        assert (result.month, result.day, result.hour) == (10, 3, 17)
