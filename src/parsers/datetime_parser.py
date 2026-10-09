@@ -579,10 +579,11 @@ class DateTimeParser:
         Returns:
             Datetime on specified date or None
         """
-        # Pattern: "15th Jan" or "Jan 15"
+        # Pattern: "15th Jan" or "Jan 15" (full names like "October" are accepted too)
         month_map = {
-            'jan': 1, 'feb': 2, 'mar': 3, 'apr': 4, 'may': 5, 'jun': 6,
-            'jul': 7, 'aug': 8, 'sep': 9, 'oct': 10, 'nov': 11, 'dec': 12
+            'jan(?:uary)?': 1, 'feb(?:ruary)?': 2, 'mar(?:ch)?': 3, 'apr(?:il)?': 4,
+            'may': 5, 'june?': 6, 'july?': 7, 'aug(?:ust)?': 8,
+            'sep(?:t(?:ember)?)?': 9, 'oct(?:ober)?': 10, 'nov(?:ember)?': 11, 'dec(?:ember)?': 12
         }
 
         # Helper function to extract time from text

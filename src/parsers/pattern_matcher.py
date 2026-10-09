@@ -9,6 +9,15 @@ from src.utils.logger import get_logger
 
 logger = get_logger('PatternMatcher')
 
+# Short month names used in the patterns below, and the expanded form that also
+# accepts full names ("October", "Sept"). Without it "3 October 10AM" only matched
+# "3 oct", dropping the time so the deadline defaulted to 5 PM.
+SHORT_MONTHS = r'(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)'
+MONTHS = (
+    r'(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?'
+    r'|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)'
+)
+
 
 class PatternMatcher:
     """Matches deadline patterns in text using regex.
@@ -181,6 +190,7 @@ class PatternMatcher:
             # "before" patterns
             r"before\s+(.+?)(?:\s|$|\.|\,|\!|\?)",
         ]
+        self.deadline_patterns = [p.replace(SHORT_MONTHS, MONTHS) for p in self.deadline_patterns]
 
         logger.info(f'Pattern matcher initialized with {len(self.deadline_patterns)} patterns')
 
