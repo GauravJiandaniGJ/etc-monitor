@@ -115,3 +115,38 @@ class TestHandleCancelReminder:
         ack.assert_called_once()
         respond.assert_called_once()
         mock_services['reminder_service'].cancel.assert_not_called()
+
+
+class TestHandleTriggerEod:
+    """/trigger-eod posts Slack follow-ups, so only listed admins may run it."""
+
+    def _run(self, handler, user_id):
+        ack, respond = Mock(), Mock()
+        handler.handle_trigger_eod(ack, respond, {'user_id': user_id, 'text': ''})
+        ack.assert_called_once()
+        return respond
+
+    def test_refuses_a_user_who_is_not_listed(self, handler, mock_services, monkeypatch):
+        monkeypatch.setenv('ADMIN_SLACK_USER_IDS', 'UADMIN1,UADMIN2')
+        respond = self._run(handler, 'USOMEONE')
+        mock_services['reminder_service'].process_eod_followups.assert_not_called()
+        assert 'only' in respond.call_args[0][0].lower()
+
+    def test_refuses_everyone_when_no_admins_are_configured(self, handler, mock_services, monkeypatch):
+        monkeypatch.delenv('ADMIN_SLACK_USER_IDS', raising=False)
+        self._run(handler, 'UADMIN1')
+        mock_services['reminder_service'].process_eod_followups.assert_not_called()
+
+    def test_runs_for_a_listed_admin(self, handler, mock_services, monkeypatch):
+        monkeypatch.setenv('ADMIN_SLACK_USER_IDS', ' UADMIN1 , UADMIN2 ')
+        mock_services['reminder_service'].process_eod_followups.return_value = 2
+        respond = self._run(handler, 'UADMIN2')
+        mock_services['reminder_service'].process_eod_followups.assert_called_once_with(
+            mock_services['notification_service'])
+        assert 'Sent 2 follow-up(s)' in respond.call_args[0][0]
+
+    def test_error_reply_does_not_leak_internal_details(self, handler, mock_services, monkeypatch):
+        monkeypatch.setenv('ADMIN_SLACK_USER_IDS', 'UADMIN1')
+        mock_services['reminder_service'].process_eod_followups.side_effect = RuntimeError('db password=secret')
+        respond = self._run(handler, 'UADMIN1')
+        assert 'secret' not in respond.call_args[0][0]

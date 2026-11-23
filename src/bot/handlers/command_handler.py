@@ -1,4 +1,5 @@
 """Command handler for Slack slash commands."""
+import os
 from typing import Callable
 from src.services.reminder_service import ReminderService
 from src.services.notification_service import NotificationService
@@ -337,7 +338,19 @@ class CommandHandler:
         ack()
         user_id = command.get('user_id')
         logger.info(f'Manual EOD trigger requested by {user_id}')
-        
+
+        # This posts follow-ups in many threads, so only admins may run it.
+        # ADMIN_SLACK_USER_IDS is a comma-separated list; if it's empty, nobody can.
+        allowed = {
+            uid.strip()
+            for uid in os.environ.get('ADMIN_SLACK_USER_IDS', '').split(',')
+            if uid.strip()
+        }
+        if user_id not in allowed:
+            logger.warning(f'Refused /trigger-eod from {user_id}: not in ADMIN_SLACK_USER_IDS')
+            respond("Sorry, only admins can run /trigger-eod.")
+            return
+
         try:
             count = self.reminder_service.process_eod_followups(self.notification_service)
             if count > 0:
@@ -346,5 +359,5 @@ class CommandHandler:
                 respond("✅ EOD Check Complete: No pending follow-ups found.")
                 
         except Exception as e:
-            logger.error(f'Error executing manual EOD trigger: {e}')
-            respond(f"❌ Error triggering EOD check: {str(e)}")
+            logger.error(f'Error executing manual EOD trigger: {e}', exc=e)
+            respond("❌ EOD check failed. Please check the bot logs.")
