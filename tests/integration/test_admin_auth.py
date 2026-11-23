@@ -4,6 +4,7 @@ The credentials come from .env (ADMIN_USERNAME / ADMIN_PASSWORD). The shared
 mock_settings fixture sets them to test_admin / test_password.
 """
 import os
+import threading
 from datetime import timedelta
 
 import pytest
@@ -165,12 +166,20 @@ class TestLoginNotConfigured:
         assert client.get('/api/bot/status').status_code == 401
 
 
-def _login_from(client, ip, password='wrong', remote_addr='127.0.0.1'):
-    """Log in as if through nginx/Cloudflare from `ip` (or directly from remote_addr)."""
+# An address inside Cloudflare's 172.64.0.0/13 range, as nginx would put it in X-Real-IP.
+CLOUDFLARE_EDGE = '172.68.0.1'
+
+
+def _login_from(client, ip, password='wrong', remote_addr='127.0.0.1', edge=CLOUDFLARE_EDGE):
+    """Log in as if from `ip` through Cloudflare -> nginx.
+
+    `edge` is what nginx puts in X-Real-IP (the address that connected to it).
+    `remote_addr` other than loopback means a direct connection, not via nginx.
+    """
     return client.post(
         '/login',
         data={'username': USERNAME, 'password': password},
-        headers={'CF-Connecting-IP': ip},
+        headers={'CF-Connecting-IP': ip, 'X-Real-IP': edge},
         environ_base={'REMOTE_ADDR': remote_addr},
     )
 
@@ -201,30 +210,90 @@ class TestBruteForceProtection:
             assert _login_from(client, ip).status_code == 401
         assert _login_from(client, ip, password=PASSWORD).status_code == 302
 
-    def test_total_cap_stops_attackers_rotating_addresses(self, client, monkeypatch):
+    def test_attack_from_many_addresses_does_not_lock_out_the_admin(self, client, monkeypatch):
         monkeypatch.setattr(admin_app, 'MAX_FAILURES_TOTAL', 6)
         for i in range(6):
             assert _login_from(client, f'203.0.113.{i}').status_code == 401
-        assert _login_from(client, '203.0.113.200', password=PASSWORD).status_code == 429
+        # A client with no recent failures can still log in during the attack.
+        assert _login_from(client, '198.51.100.9', password=PASSWORD).status_code == 302
+
+    def test_attack_mode_limits_each_address_to_one_guess(self, client, monkeypatch):
+        monkeypatch.setattr(admin_app, 'MAX_FAILURES_TOTAL', 6)
+        for i in range(6):
+            _login_from(client, f'203.0.113.{i}')
+        # An address that already failed is refused, even with the right password.
+        assert _login_from(client, '203.0.113.0', password=PASSWORD).status_code == 429
+        # A new address gets one guess, then has to wait.
+        assert _login_from(client, '203.0.113.100').status_code == 401
+        assert _login_from(client, '203.0.113.100').status_code == 429
 
     def test_direct_connection_cannot_forge_its_address(self, client):
-        # Not via nginx: CF-Connecting-IP is ignored, the socket address counts.
+        # Not via nginx: the forwarded headers are ignored, the socket address counts.
         for i in range(admin_app.MAX_FAILURES_PER_CLIENT):
-            response = _login_from(client, f'192.0.2.{i}', remote_addr='203.0.113.50')
+            response = _login_from(client, f'192.0.2.{i}', remote_addr='203.0.113.50', edge=f'192.0.2.{i}')
             assert response.status_code == 401
         response = _login_from(client, '192.0.2.99', password=PASSWORD, remote_addr='203.0.113.50')
         assert response.status_code == 429
 
+    def test_forged_cloudflare_header_is_ignored_when_cloudflare_is_bypassed(self, client):
+        # Via nginx but not via Cloudflare: X-Real-IP is the attacker itself, and
+        # its made-up CF-Connecting-IP values must not give it fresh limits.
+        attacker = '203.0.113.77'
+        for i in range(admin_app.MAX_FAILURES_PER_CLIENT):
+            assert _login_from(client, f'192.0.2.{i}', edge=attacker).status_code == 401
+        assert _login_from(client, '192.0.2.99', password=PASSWORD, edge=attacker).status_code == 429
 
-class TestLoginThrottleWindow:
+    def test_ipv6_addresses_in_one_64_block_share_a_limit(self, client):
+        for i in range(admin_app.MAX_FAILURES_PER_CLIENT):
+            assert _login_from(client, f'2001:db8:1:2::{i + 1}').status_code == 401
+        assert _login_from(client, '2001:db8:1:2:ffff::1', password=PASSWORD).status_code == 429
+        # A different /64 is a different client.
+        assert _login_from(client, '2001:db8:1:3::1', password=PASSWORD).status_code == 302
+
+
+class TestLoginThrottle:
     def test_lockout_ends_when_failures_age_out(self):
         throttle = LoginThrottle()
         start = 1000.0
         for i in range(admin_app.MAX_FAILURES_PER_CLIENT):
-            throttle.record_failure('client', now=start + i)
+            assert throttle.begin_attempt('client', now=start + i) is not None
         window = admin_app.FAILURE_WINDOW_SECONDS
-        assert throttle.is_blocked('client', now=start + window - 1)
-        assert not throttle.is_blocked('client', now=start + window)
+        assert throttle.begin_attempt('client', now=start + window - 1) is None
+        assert throttle.begin_attempt('client', now=start + window) is not None
 
     def test_unknown_client_is_not_blocked(self):
-        assert not LoginThrottle().is_blocked('nobody', now=0.0)
+        assert LoginThrottle().begin_attempt('nobody', now=0.0) is not None
+
+    def test_attempts_in_progress_count_toward_the_limit(self):
+        # Parallel requests each reserve a slot before the password is checked,
+        # so they can't all pass the limit check first.
+        throttle = LoginThrottle()
+        for _ in range(admin_app.MAX_FAILURES_PER_CLIENT):
+            assert throttle.begin_attempt('client', now=10.0) is not None
+        assert throttle.begin_attempt('client', now=10.0) is None
+
+    def test_concurrent_attempts_never_exceed_the_limit(self):
+        throttle = LoginThrottle()
+        workers = 4 * admin_app.MAX_FAILURES_PER_CLIENT
+        barrier = threading.Barrier(workers)
+        results = []
+
+        def attempt():
+            barrier.wait()
+            results.append(throttle.begin_attempt('client'))
+
+        threads = [threading.Thread(target=attempt) for _ in range(workers)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        allowed = [token for token in results if token is not None]
+        assert len(allowed) == admin_app.MAX_FAILURES_PER_CLIENT
+
+    def test_success_releases_the_reservation(self):
+        throttle = LoginThrottle()
+        token = throttle.begin_attempt('client', now=5.0)
+        throttle.succeeded('client', token)
+        assert len(throttle._all) == 0
+        for _ in range(admin_app.MAX_FAILURES_PER_CLIENT):
+            assert throttle.begin_attempt('client', now=6.0) is not None

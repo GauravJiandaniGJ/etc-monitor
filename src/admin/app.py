@@ -1,5 +1,6 @@
 """Flask admin panel application."""
 import hmac
+import ipaddress
 import os
 import threading
 import time
@@ -26,20 +27,37 @@ DEFAULT_ADMIN_PASSWORD = 'changeme'
 FAILED_LOGIN_DELAY_SECONDS = 1
 SESSION_LIFETIME = timedelta(days=7)
 
-# Brute-force protection. Within the window, one client may fail this many times
-# before it is locked out; the total cap pauses all logins if many clients fail
-# (e.g. an attacker rotating IP addresses or forged headers).
+# Brute-force protection, over a sliding window:
+# - one client may fail MAX_FAILURES_PER_CLIENT times, then must wait;
+# - once MAX_FAILURES_TOTAL failures pile up across all clients (an attack from
+#   many addresses), any client that has failed even once must wait. Clients
+#   with no recent failures - such as the real admin - can still log in.
 MAX_FAILURES_PER_CLIENT = 5
 MAX_FAILURES_TOTAL = 50
 FAILURE_WINDOW_SECONDS = 15 * 60
 
-# Requests from these addresses come through the local nginx proxy, so the real
-# client address is in the forwarded headers. Anything else connected directly.
+# Requests from these addresses come through the local nginx proxy.
 LOCAL_PROXY_ADDRS = ('127.0.0.1', '::1')
+
+# Cloudflare's published ranges (https://www.cloudflare.com/ips/, checked 2026-11-23).
+# CF-Connecting-IP is only trusted when nginx says the request came from one of these;
+# otherwise anyone reaching the server directly could forge it.
+CLOUDFLARE_NETWORKS = tuple(ipaddress.ip_network(net) for net in (
+    '173.245.48.0/20', '103.21.244.0/22', '103.22.200.0/22', '103.31.4.0/22',
+    '141.101.64.0/18', '108.162.192.0/18', '190.93.240.0/20', '188.114.96.0/20',
+    '197.234.240.0/22', '198.41.128.0/17', '162.158.0.0/15', '104.16.0.0/13',
+    '104.24.0.0/14', '172.64.0.0/13', '131.0.72.0/22',
+    '2400:cb00::/32', '2606:4700::/32', '2803:f800::/32', '2405:b500::/32',
+    '2405:8100::/32', '2a06:98c0::/29', '2c0f:f248::/32',
+))
 
 
 class LoginThrottle:
     """Counts failed logins in memory over a sliding window.
+
+    Each attempt is counted as a failure *before* the password is checked, in
+    the same locked step as the limit check, so parallel requests can't slip
+    past the limit. A successful login removes that count again.
 
     The admin panel runs as a single process, so in-memory state is enough.
     It resets when the admin service restarts.
@@ -49,6 +67,7 @@ class LoginThrottle:
         self._lock = threading.Lock()
         self._by_client = {}
         self._all = deque()
+        self._under_attack = False
 
     @staticmethod
     def _expire(failures: deque, now: float):
@@ -62,26 +81,34 @@ class LoginThrottle:
             if not self._by_client[key]:
                 del self._by_client[key]
 
-    def is_blocked(self, client: str, now: Optional[float] = None) -> bool:
-        """True if this client, or everyone, has failed too often recently."""
-        now = time.monotonic() if now is None else now
-        with self._lock:
-            self._expire_all(now)
-            if len(self._all) >= MAX_FAILURES_TOTAL:
-                return True
-            return len(self._by_client.get(client, ())) >= MAX_FAILURES_PER_CLIENT
+    def begin_attempt(self, client: str, now: Optional[float] = None) -> Optional[float]:
+        """Check the limits and reserve this attempt as a failure, atomically.
 
-    def record_failure(self, client: str, now: Optional[float] = None):
+        Returns a token for succeeded(), or None if the client has to wait.
+        """
         now = time.monotonic() if now is None else now
         with self._lock:
             self._expire_all(now)
+            under_attack = len(self._all) >= MAX_FAILURES_TOTAL
+            if under_attack != self._under_attack:
+                self._under_attack = under_attack
+                if under_attack:
+                    logger.warning('Many failed admin logins: clients with any recent failure must wait')
+            limit = 1 if under_attack else MAX_FAILURES_PER_CLIENT
+            if len(self._by_client.get(client, ())) >= limit:
+                return None
             self._by_client.setdefault(client, deque()).append(now)
             self._all.append(now)
+            return now
 
-    def reset(self, client: str):
-        """Forget a client's failures after it logs in successfully."""
+    def succeeded(self, client: str, token: float):
+        """Forget the client's failures, including this attempt's reservation."""
         with self._lock:
             self._by_client.pop(client, None)
+            try:
+                self._all.remove(token)
+            except ValueError:
+                pass
 
 
 def _login_configured(settings: Settings) -> bool:
@@ -103,21 +130,41 @@ def _credentials_match(settings: Settings, username: str, password: str) -> bool
     return username_ok and password_ok
 
 
-def _client_ip() -> str:
-    """Client IP used for login throttling and logs.
+def _is_cloudflare(address: str) -> bool:
+    try:
+        ip = ipaddress.ip_address(address)
+    except ValueError:
+        return False
+    return any(ip in network for network in CLOUDFLARE_NETWORKS)
 
-    Through nginx (Cloudflare in front), the client is in CF-Connecting-IP or
-    X-Real-IP. A direct connection (e.g. to port 8090) could forge those
-    headers, so its socket address is used instead.
+
+def _client_ip() -> str:
+    """Client IP used for login throttling and logs, resistant to forged headers.
+
+    - Direct connection (e.g. to port 8090): the socket address.
+    - Through nginx: nginx overwrites X-Real-IP with the address that connected
+      to it. If that is Cloudflare, the client is in CF-Connecting-IP (set by
+      Cloudflare); if not, the request bypassed Cloudflare and X-Real-IP is
+      the client itself.
     """
     remote = request.remote_addr or 'unknown'
-    if remote in LOCAL_PROXY_ADDRS:
-        return (
-            request.headers.get('CF-Connecting-IP')
-            or request.headers.get('X-Real-IP')
-            or remote
-        )
-    return remote
+    if remote not in LOCAL_PROXY_ADDRS:
+        return remote
+    peer = request.headers.get('X-Real-IP', '').strip() or remote
+    if _is_cloudflare(peer):
+        return request.headers.get('CF-Connecting-IP', '').strip() or peer
+    return peer
+
+
+def _throttle_key(client_ip: str) -> str:
+    """Group IPv6 clients by /64, since one user can easily switch addresses inside it."""
+    try:
+        ip = ipaddress.ip_address(client_ip)
+    except ValueError:
+        return client_ip
+    if ip.version == 6:
+        return str(ipaddress.ip_network(f'{ip}/64', strict=False))
+    return client_ip
 
 
 def create_app(settings: Optional[Settings] = None) -> Flask:
@@ -189,15 +236,17 @@ def create_app(settings: Optional[Settings] = None) -> Flask:
         password = request.form.get('password', '')
         shown_name = repr(username[:64])
         client = _client_ip()
+        throttle_key = _throttle_key(client)
 
-        # Checked before the password, so a locked-out client can't keep guessing.
-        if login_throttle.is_blocked(client):
+        # Reserved before the password is checked, so a locked-out client can't keep guessing.
+        attempt = login_throttle.begin_attempt(throttle_key)
+        if attempt is None:
             logger.warning(f'Admin login blocked after too many failures: {shown_name} from {client}')
             error = 'Too many failed attempts. Please try again in 15 minutes.'
             return render_template('login.html', error=error, username=username), 429
 
         if _credentials_match(settings, username, password):
-            login_throttle.reset(client)
+            login_throttle.succeeded(throttle_key, attempt)
             session.clear()
             session['logged_in'] = True
             session['username'] = username
@@ -205,7 +254,6 @@ def create_app(settings: Optional[Settings] = None) -> Flask:
             logger.info(f'Admin login succeeded for {shown_name} from {client}')
             return redirect(url_for('root'))
 
-        login_throttle.record_failure(client)
         time.sleep(FAILED_LOGIN_DELAY_SECONDS)
         if _login_configured(settings):
             error = 'Invalid username or password'
