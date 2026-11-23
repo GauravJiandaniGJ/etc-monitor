@@ -53,3 +53,15 @@ class TestLoginPage:
         html = _login(client, password='wrong').get_data(as_text=True)
         assert 'role="alert"' in html
         assert 'Invalid username or password' in html
+
+
+@pytest.mark.integration
+class TestDashboardPage:
+    def test_dashboard_has_new_layout(self, client):
+        _login(client)
+        html = client.get('/').get_data(as_text=True)
+        for needle in ('id="up-next"', 'id="all-etcs"', 'id="refresh-btn"', 'id="bot-menu"',
+                       'id="confirm-dialog"', 'href="/logout"', 'type="module"', 'css/base.css'):
+            assert needle in html, needle
+        for gone in ('trigger-eod-btn', 'bot-toggle-btn', 'fonts.googleapis'):
+            assert gone not in html, gone

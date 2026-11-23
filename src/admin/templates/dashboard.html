@@ -4,176 +4,145 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ETC Monitor • Admin</title>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <title>ETC Monitor</title>
+    {% include '_theme_boot.html' %}
     <link rel="icon" href="{{ url_for('static', filename='assets/favicon.ico') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/base.css') }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css') }}">
 </head>
 
 <body>
-    <div class="app">
-        <header class="header">
-            <div class="logo">
-                <span>ETC Monitor</span>
-            </div>
-            <div class="header-right">
-                <button id="bot-toggle-btn"
-                    style="margin-right: 12px; padding: 6px 12px; background: var(--danger); color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 0.9rem; font-weight: 500; display: flex; align-items: center; gap: 6px;"
-                    title="Pause Bot">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-                        stroke-linecap="round" stroke-linejoin="round">
-                        <rect x="6" y="4" width="4" height="16"></rect>
-                        <rect x="14" y="4" width="4" height="16"></rect>
-                    </svg>
-                    Pause Bot
-                </button>
-                <button id="trigger-eod-btn"
-                    style="margin-right: 12px; padding: 6px 12px; background: var(--warning); color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 0.9rem; font-weight: 500; display: flex; align-items: center; gap: 6px;"
-                    title="Trigger EOD Check">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-                        stroke-linecap="round" stroke-linejoin="round">
-                        <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
-                    </svg>
-                    Trigger EOD
-                </button>
-                <button class="theme-toggle" onclick="toggleTheme()" title="Toggle theme">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" id="theme-icon">
-                        <path
-                            d="M10.41 13.28C7.332 10.205 6.716 5.693 8.357 2c-1.23.41-2.256 1.23-3.281 2.256a10.399 10.399 0 0 0 0 14.768c4.102 4.102 10.46 3.897 14.562-.205 1.026-1.026 1.846-2.051 2.256-3.282-3.896 1.436-8.409.82-11.486-2.256Z"
-                            fill="currentColor" fill-opacity=".16" stroke="currentColor" stroke-width="1.5"
-                            stroke-linecap="round" stroke-linejoin="round" />
-                    </svg>
-                </button>
-                <div class="status-indicator" id="bot-status-indicator">
-                    <div class="status-dot" id="bot-status-dot"></div>
-                    <span id="bot-status-text">Bot Running</span>
+    {% include '_icons.html' %}
+
+    <header class="topbar">
+        <div class="topbar-inner">
+            <a class="brand" href="{{ url_for('root') }}">ETC Monitor</a>
+
+            <div class="topbar-controls">
+                <div class="bot-control">
+                    <button type="button" id="bot-chip" class="bot-chip" aria-haspopup="menu" aria-expanded="false"
+                        aria-controls="bot-menu">
+                        <span id="bot-chip-dot" class="bot-chip-dot" aria-hidden="true"></span>
+                        <span id="bot-chip-label">Checking bot…</span>
+                        <svg class="icon bot-chip-caret" aria-hidden="true"><use href="#i-caret-down"></use></svg>
+                    </button>
+
+                    <div id="bot-menu" class="menu" role="menu" aria-labelledby="bot-chip" hidden>
+                        <button type="button" id="bot-toggle-item" class="menu-item" role="menuitem">
+                            <svg id="bot-toggle-icon" class="icon" aria-hidden="true"><use href="#i-pause"></use></svg>
+                            <span class="menu-item-text">
+                                <span id="bot-toggle-title" class="menu-item-title">Pause bot</span>
+                                <span id="bot-toggle-desc" class="menu-item-desc">Stops reading new ETCs until you resume.</span>
+                            </span>
+                        </button>
+                        <div class="menu-divider" role="separator"></div>
+                        <button type="button" id="eod-item" class="menu-item" role="menuitem">
+                            <svg class="icon" aria-hidden="true"><use href="#i-lightning"></use></svg>
+                            <span class="menu-item-text">
+                                <span class="menu-item-title">Run EOD check now</span>
+                                <span class="menu-item-desc">Posts '👀 Update on this?' in Slack for reminders sent in the last 24 hours that got no reply.</span>
+                            </span>
+                        </button>
+                    </div>
                 </div>
-                <a href="{{ url_for('logout') }}" id="logout-link"
-                    style="margin-left: 12px; padding: 6px 12px; background: #64748b; color: white; border-radius: 6px; font-size: 0.9rem; font-weight: 500; text-decoration: none; display: flex; align-items: center; gap: 6px;"
-                    title="Sign out">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-                        stroke-linecap="round" stroke-linejoin="round">
-                        <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path>
-                        <polyline points="16 17 21 12 16 7"></polyline>
-                        <line x1="21" y1="12" x2="9" y2="12"></line>
-                    </svg>
-                    Logout
+
+                <span id="updated-label" class="updated-label num"></span>
+
+                <button type="button" id="refresh-btn" class="btn">
+                    <svg class="icon" aria-hidden="true"><use href="#i-arrow-clockwise"></use></svg>
+                    <span>Refresh</span>
+                </button>
+
+                <button type="button" id="theme-btn" class="btn btn-icon" aria-label="Switch between light and dark theme"
+                    title="Switch between light and dark theme">
+                    <svg class="icon theme-icon-to-dark" aria-hidden="true"><use href="#i-moon"></use></svg>
+                    <svg class="icon theme-icon-to-light" aria-hidden="true"><use href="#i-sun"></use></svg>
+                </button>
+
+                <a id="logout-link" class="btn btn-ghost" href="{{ url_for('logout') }}">
+                    <svg class="icon" aria-hidden="true"><use href="#i-sign-out"></use></svg>
+                    <span>Sign out</span>
                 </a>
             </div>
-        </header>
+        </div>
+    </header>
 
-        <main class="main">
-            <div class="stats-grid">
-                <div class="stat-card">
-                    <div class="stat-header">
-                        <span class="stat-title">Total Reminders</span>
-                        <div class="stat-icon primary">
-                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                                stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                                <line x1="18" y1="20" x2="18" y2="10"></line>
-                                <line x1="12" y1="20" x2="12" y2="4"></line>
-                                <line x1="6" y1="20" x2="6" y2="14"></line>
-                            </svg>
-                        </div>
-                    </div>
-                    <div class="stat-value" id="total">-</div>
+    <main class="page">
+        <div id="notice" class="notice" role="status" aria-live="polite" hidden>
+            <svg class="icon" aria-hidden="true"><use href="#i-warning"></use></svg>
+            <span id="notice-text" class="notice-text"></span>
+            <button type="button" id="notice-retry" class="btn">Try again</button>
+        </div>
+
+        <section id="up-next" class="section" aria-labelledby="up-next-title">
+            <div class="section-head">
+                <h2 id="up-next-title" class="section-title">Up next</h2>
+                <span id="up-next-count" class="section-count"></span>
+            </div>
+            <p class="section-help">Reminders the bot will post in Slack, soonest first.</p>
+            <div id="up-next-body" class="upnext">
+                <p class="loading">Loading reminders…</p>
+            </div>
+            <button type="button" id="up-next-more" class="btn section-more" hidden></button>
+        </section>
+
+        <section id="all-etcs" class="section" aria-labelledby="all-etcs-title">
+            <div class="section-head">
+                <h2 id="all-etcs-title" class="section-title">All ETCs</h2>
+            </div>
+            <p class="section-help">Everything the bot has picked up. Use the tabs or search to find one.</p>
+
+            <div class="list-controls">
+                <div id="status-tabs" class="tabs" role="tablist" aria-label="Show ETCs by status">
+                    <button type="button" class="tab" role="tab" data-status="all" aria-selected="true" aria-controls="etc-list">All <span class="tab-count num" data-count-for="all"></span></button>
+                    <button type="button" class="tab" role="tab" data-status="pending" aria-selected="false" aria-controls="etc-list" tabindex="-1">Pending <span class="tab-count num" data-count-for="pending"></span></button>
+                    <button type="button" class="tab" role="tab" data-status="sent" aria-selected="false" aria-controls="etc-list" tabindex="-1">Sent <span class="tab-count num" data-count-for="sent"></span></button>
+                    <button type="button" class="tab" role="tab" data-status="cancelled" aria-selected="false" aria-controls="etc-list" tabindex="-1">Cancelled <span class="tab-count num" data-count-for="cancelled"></span></button>
+                    <button type="button" class="tab" role="tab" data-status="failed" aria-selected="false" aria-controls="etc-list" tabindex="-1">Failed <span class="tab-count num" data-count-for="failed"></span></button>
                 </div>
-                <div class="stat-card">
-                    <div class="stat-header">
-                        <span class="stat-title">Pending</span>
-                        <div class="stat-icon warning">
-                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                                stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                                <circle cx="12" cy="12" r="10"></circle>
-                                <polyline points="12 6 12 12 16 14"></polyline>
-                            </svg>
-                        </div>
-                    </div>
-                    <div class="stat-value" id="pending">-</div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-header">
-                        <span class="stat-title">Sent</span>
-                        <div class="stat-icon success">
-                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                                stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                                <polyline points="20 6 9 17 4 12"></polyline>
-                            </svg>
-                        </div>
-                    </div>
-                    <div class="stat-value" id="sent">-</div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-header">
-                        <span class="stat-title">Cancelled</span>
-                        <div class="stat-icon danger">
-                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                                stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                                <line x1="18" y1="6" x2="6" y2="18"></line>
-                                <line x1="6" y1="6" x2="18" y2="18"></line>
-                            </svg>
-                        </div>
-                    </div>
-                    <div class="stat-value" id="cancelled">-</div>
+
+                <div class="search">
+                    <label for="search" class="visually-hidden">Search</label>
+                    <svg class="icon search-icon" aria-hidden="true"><use href="#i-magnifying-glass"></use></svg>
+                    <input type="search" id="search" class="field-input search-input"
+                        placeholder="Search by person, channel or ETC text" autocomplete="off" spellcheck="false">
                 </div>
             </div>
 
-            <div class="content-card">
-                <div class="content-header">
-                    <h2 class="content-title">Reminder Management</h2>
-                    <div style="display: flex; gap: 1rem; align-items: center;">
-                        <div class="tabs">
-                            <button class="tab active" onclick="showTab('all')">All Reminders</button>
-                            <button class="tab" onclick="showTab('pending')">Pending Only</button>
-                        </div>
-                    </div>
+            <div class="etc-table" role="table" aria-label="All ETCs">
+                <div class="etc-head" role="row">
+                    <span role="columnheader">Person</span>
+                    <span role="columnheader">Channel</span>
+                    <span role="columnheader">ETC</span>
+                    <span role="columnheader">Due</span>
+                    <span role="columnheader">Status</span>
+                    <span role="columnheader">Created</span>
+                    <span role="columnheader"><span class="visually-hidden">Action</span></span>
                 </div>
-
-                <div class="table-container">
-                    <div id="all-tab">
-                        <div id="loading" class="loading">Loading reminders...</div>
-                        <div id="error" class="error" style="display:none;"></div>
-                        <table class="data-table" id="remindersTable" style="display:none;">
-                            <thead>
-                                <tr>
-                                    <th>User</th>
-                                    <th>Channel</th>
-                                    <th>Message</th>
-                                    <th>Deadline</th>
-                                    <th>Reminder Time</th>
-                                    <th>Status</th>
-                                    <th>Created</th>
-                                    <th>Actions</th>
-                                </tr>
-                            </thead>
-                            <tbody id="remindersBody">
-                            </tbody>
-                        </table>
-                    </div>
-                    <div id="pending-tab" style="display:none;">
-                        <div id="loading-pending" class="loading">Loading pending reminders...</div>
-                        <table class="data-table" id="pendingTable" style="display:none;">
-                            <thead>
-                                <tr>
-                                    <th>User</th>
-                                    <th>Channel</th>
-                                    <th>Message</th>
-                                    <th>Deadline</th>
-                                    <th>Reminder Time</th>
-                                    <th>Created</th>
-                                    <th>Actions</th>
-                                </tr>
-                            </thead>
-                            <tbody id="pendingBody">
-                            </tbody>
-                        </table>
-                    </div>
+                <div id="etc-list" class="etc-list" role="rowgroup">
+                    <p class="loading">Loading ETCs…</p>
                 </div>
             </div>
-        </main>
-    </div>
 
-    <script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
+            <div id="list-footer" class="list-footer" hidden>
+                <span id="loaded-note" class="loaded-note"></span>
+                <button type="button" id="show-more-btn" class="btn" hidden>Show more</button>
+            </div>
+        </section>
+    </main>
+
+    <div id="toast" class="toast" aria-live="polite" hidden></div>
+
+    <dialog id="confirm-dialog" class="dialog" aria-labelledby="confirm-title" aria-describedby="confirm-body">
+        <h2 id="confirm-title" class="dialog-title"></h2>
+        <p id="confirm-body" class="dialog-body"></p>
+        <div class="dialog-actions">
+            <button type="button" id="confirm-cancel" class="btn">Go back</button>
+            <button type="button" id="confirm-ok" class="btn btn-primary"></button>
+        </div>
+    </dialog>
+
+    <script type="module" src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
 </body>
 
 </html>
