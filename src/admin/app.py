@@ -1,7 +1,9 @@
 """Flask admin panel application."""
 import hmac
 import os
+import threading
 import time
+from collections import deque
 from datetime import timedelta
 from typing import Optional
 from flask import Flask, jsonify, redirect, render_template, request, session, url_for
@@ -24,6 +26,63 @@ DEFAULT_ADMIN_PASSWORD = 'changeme'
 FAILED_LOGIN_DELAY_SECONDS = 1
 SESSION_LIFETIME = timedelta(days=7)
 
+# Brute-force protection. Within the window, one client may fail this many times
+# before it is locked out; the total cap pauses all logins if many clients fail
+# (e.g. an attacker rotating IP addresses or forged headers).
+MAX_FAILURES_PER_CLIENT = 5
+MAX_FAILURES_TOTAL = 50
+FAILURE_WINDOW_SECONDS = 15 * 60
+
+# Requests from these addresses come through the local nginx proxy, so the real
+# client address is in the forwarded headers. Anything else connected directly.
+LOCAL_PROXY_ADDRS = ('127.0.0.1', '::1')
+
+
+class LoginThrottle:
+    """Counts failed logins in memory over a sliding window.
+
+    The admin panel runs as a single process, so in-memory state is enough.
+    It resets when the admin service restarts.
+    """
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._by_client = {}
+        self._all = deque()
+
+    @staticmethod
+    def _expire(failures: deque, now: float):
+        while failures and now - failures[0] >= FAILURE_WINDOW_SECONDS:
+            failures.popleft()
+
+    def _expire_all(self, now: float):
+        self._expire(self._all, now)
+        for key in list(self._by_client):
+            self._expire(self._by_client[key], now)
+            if not self._by_client[key]:
+                del self._by_client[key]
+
+    def is_blocked(self, client: str, now: Optional[float] = None) -> bool:
+        """True if this client, or everyone, has failed too often recently."""
+        now = time.monotonic() if now is None else now
+        with self._lock:
+            self._expire_all(now)
+            if len(self._all) >= MAX_FAILURES_TOTAL:
+                return True
+            return len(self._by_client.get(client, ())) >= MAX_FAILURES_PER_CLIENT
+
+    def record_failure(self, client: str, now: Optional[float] = None):
+        now = time.monotonic() if now is None else now
+        with self._lock:
+            self._expire_all(now)
+            self._by_client.setdefault(client, deque()).append(now)
+            self._all.append(now)
+
+    def reset(self, client: str):
+        """Forget a client's failures after it logs in successfully."""
+        with self._lock:
+            self._by_client.pop(client, None)
+
 
 def _login_configured(settings: Settings) -> bool:
     """Return True only when a real ADMIN_PASSWORD is set in .env."""
@@ -45,13 +104,20 @@ def _credentials_match(settings: Settings, username: str, password: str) -> bool
 
 
 def _client_ip() -> str:
-    """Best-effort client IP behind Cloudflare and nginx. Used for logs only."""
-    return (
-        request.headers.get('CF-Connecting-IP')
-        or request.headers.get('X-Real-IP')
-        or request.remote_addr
-        or 'unknown'
-    )
+    """Client IP used for login throttling and logs.
+
+    Through nginx (Cloudflare in front), the client is in CF-Connecting-IP or
+    X-Real-IP. A direct connection (e.g. to port 8090) could forge those
+    headers, so its socket address is used instead.
+    """
+    remote = request.remote_addr or 'unknown'
+    if remote in LOCAL_PROXY_ADDRS:
+        return (
+            request.headers.get('CF-Connecting-IP')
+            or request.headers.get('X-Real-IP')
+            or remote
+        )
+    return remote
 
 
 def create_app(settings: Optional[Settings] = None) -> Flask:
@@ -84,6 +150,7 @@ def create_app(settings: Optional[Settings] = None) -> Flask:
     )
     if not _login_configured(settings):
         logger.warning('ADMIN_PASSWORD is not set in .env - all admin logins will be refused')
+    login_throttle = LoginThrottle()
 
     # Configure CORS
     CORS(app, resources={
@@ -121,21 +188,30 @@ def create_app(settings: Optional[Settings] = None) -> Flask:
         username = request.form.get('username', '')
         password = request.form.get('password', '')
         shown_name = repr(username[:64])
+        client = _client_ip()
+
+        # Checked before the password, so a locked-out client can't keep guessing.
+        if login_throttle.is_blocked(client):
+            logger.warning(f'Admin login blocked after too many failures: {shown_name} from {client}')
+            error = 'Too many failed attempts. Please try again in 15 minutes.'
+            return render_template('login.html', error=error, username=username), 429
 
         if _credentials_match(settings, username, password):
+            login_throttle.reset(client)
             session.clear()
             session['logged_in'] = True
             session['username'] = username
             session.permanent = True
-            logger.info(f'Admin login succeeded for {shown_name} from {_client_ip()}')
+            logger.info(f'Admin login succeeded for {shown_name} from {client}')
             return redirect(url_for('root'))
 
+        login_throttle.record_failure(client)
         time.sleep(FAILED_LOGIN_DELAY_SECONDS)
         if _login_configured(settings):
             error = 'Invalid username or password'
         else:
             error = 'Login is not set up on the server yet (ADMIN_PASSWORD missing in .env)'
-        logger.warning(f'Admin login failed for {shown_name} from {_client_ip()}')
+        logger.warning(f'Admin login failed for {shown_name} from {client}')
         return render_template('login.html', error=error, username=username), 401
 
     @app.route('/logout')

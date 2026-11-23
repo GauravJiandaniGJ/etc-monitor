@@ -9,7 +9,7 @@ from datetime import timedelta
 import pytest
 
 from src.admin import app as admin_app
-from src.admin.app import create_app
+from src.admin.app import LoginThrottle, create_app
 from src.admin.routes import reminder_routes
 
 USERNAME = 'test_admin'
@@ -163,3 +163,68 @@ class TestLoginNotConfigured:
         assert response.status_code == 401
         assert 'not set up' in response.get_data(as_text=True)
         assert client.get('/api/bot/status').status_code == 401
+
+
+def _login_from(client, ip, password='wrong', remote_addr='127.0.0.1'):
+    """Log in as if through nginx/Cloudflare from `ip` (or directly from remote_addr)."""
+    return client.post(
+        '/login',
+        data={'username': USERNAME, 'password': password},
+        headers={'CF-Connecting-IP': ip},
+        environ_base={'REMOTE_ADDR': remote_addr},
+    )
+
+
+@pytest.mark.integration
+class TestBruteForceProtection:
+    def test_client_is_locked_out_after_too_many_failures(self, client):
+        for _ in range(admin_app.MAX_FAILURES_PER_CLIENT):
+            assert _login_from(client, '198.51.100.1').status_code == 401
+        # Even the right password is refused while locked out.
+        response = _login_from(client, '198.51.100.1', password=PASSWORD)
+        assert response.status_code == 429
+        assert 'Too many failed attempts' in response.get_data(as_text=True)
+        assert client.get('/api/bot/status').status_code == 401
+
+    def test_other_clients_can_still_log_in(self, client):
+        for _ in range(admin_app.MAX_FAILURES_PER_CLIENT):
+            _login_from(client, '198.51.100.1')
+        assert _login_from(client, '198.51.100.2', password=PASSWORD).status_code == 302
+
+    def test_successful_login_clears_earlier_failures(self, client):
+        ip = '198.51.100.3'
+        for _ in range(admin_app.MAX_FAILURES_PER_CLIENT - 1):
+            _login_from(client, ip)
+        assert _login_from(client, ip, password=PASSWORD).status_code == 302
+        client.get('/logout')
+        for _ in range(admin_app.MAX_FAILURES_PER_CLIENT - 1):
+            assert _login_from(client, ip).status_code == 401
+        assert _login_from(client, ip, password=PASSWORD).status_code == 302
+
+    def test_total_cap_stops_attackers_rotating_addresses(self, client, monkeypatch):
+        monkeypatch.setattr(admin_app, 'MAX_FAILURES_TOTAL', 6)
+        for i in range(6):
+            assert _login_from(client, f'203.0.113.{i}').status_code == 401
+        assert _login_from(client, '203.0.113.200', password=PASSWORD).status_code == 429
+
+    def test_direct_connection_cannot_forge_its_address(self, client):
+        # Not via nginx: CF-Connecting-IP is ignored, the socket address counts.
+        for i in range(admin_app.MAX_FAILURES_PER_CLIENT):
+            response = _login_from(client, f'192.0.2.{i}', remote_addr='203.0.113.50')
+            assert response.status_code == 401
+        response = _login_from(client, '192.0.2.99', password=PASSWORD, remote_addr='203.0.113.50')
+        assert response.status_code == 429
+
+
+class TestLoginThrottleWindow:
+    def test_lockout_ends_when_failures_age_out(self):
+        throttle = LoginThrottle()
+        start = 1000.0
+        for i in range(admin_app.MAX_FAILURES_PER_CLIENT):
+            throttle.record_failure('client', now=start + i)
+        window = admin_app.FAILURE_WINDOW_SECONDS
+        assert throttle.is_blocked('client', now=start + window - 1)
+        assert not throttle.is_blocked('client', now=start + window)
+
+    def test_unknown_client_is_not_blocked(self):
+        assert not LoginThrottle().is_blocked('nobody', now=0.0)
