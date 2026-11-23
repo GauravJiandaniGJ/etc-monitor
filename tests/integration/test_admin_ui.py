@@ -3,6 +3,8 @@
 These read what the server sends (no browser): local styles only, theme set before
 paint, the licensed icon sprite, and the dashboard's no-polling / no-HTML-injection rules.
 """
+from pathlib import Path
+
 import pytest
 
 from src.admin import app as admin_app
@@ -65,3 +67,35 @@ class TestDashboardPage:
             assert needle in html, needle
         for gone in ('trigger-eod-btn', 'bot-toggle-btn', 'fonts.googleapis'):
             assert gone not in html, gone
+
+
+JS_DIR = Path(__file__).resolve().parents[2] / 'src' / 'admin' / 'static' / 'js'
+
+
+def _js_lines():
+    for path in sorted(JS_DIR.glob('*.js')):
+        for number, line in enumerate(path.read_text().splitlines(), 1):
+            yield path.name, number, line
+
+
+@pytest.mark.integration
+class TestDashboardScripts:
+    def test_dashboard_js_never_polls(self):
+        intervals = [(f, n, line) for f, n, line in _js_lines() if 'setInterval(' in line]
+        assert len(intervals) == 1, intervals
+        assert 'updateRelativeTimes' in intervals[0][2]
+        for f, n, line in _js_lines():
+            if 'setTimeout(' in line:
+                assert 'hideToast' in line, f'{f}:{n}: {line.strip()}'
+            assert 'location.reload' not in line, f'{f}:{n}'
+
+    def test_js_never_injects_html(self):
+        for f, n, line in _js_lines():
+            for bad in ('innerHTML', 'outerHTML', 'insertAdjacentHTML'):
+                assert bad not in line, f'{f}:{n}: {line.strip()}'
+
+    @pytest.mark.parametrize('name', ['dashboard.js', 'format.js', 'api.js'])
+    def test_js_served_as_javascript(self, client, name):
+        response = client.get(f'/static/js/{name}')
+        assert response.status_code == 200
+        assert 'javascript' in response.mimetype

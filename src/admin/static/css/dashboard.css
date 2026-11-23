@@ -210,6 +210,7 @@
   font-family: var(--font-serif);
   font-size: 15px;
   font-style: italic;
+  font-weight: 400;
 }
 .upnext > .day-heading:first-child { padding-top: 4px; }
 
@@ -330,7 +331,7 @@
 .search-input { padding-left: 34px; }
 
 .etc-table {
-  --etc-cols: minmax(0, 1.1fr) minmax(0, 0.9fr) minmax(0, 2fr) 128px 112px 128px 92px;
+  --etc-cols: minmax(0, 1.1fr) minmax(0, 0.9fr) minmax(0, 2fr) 152px 112px 152px 92px;
 }
 
 .etc-head,
@@ -356,11 +357,12 @@
 }
 
 .etc-cell { min-width: 0; overflow-wrap: anywhere; }
+.etc-cell > .etc-text { min-width: 0; }
 .etc-person { font-weight: 500; }
 .etc-channel,
 .etc-created { color: var(--muted); }
 .etc-due,
-.etc-created { font-variant-numeric: tabular-nums; }
+.etc-created { font-variant-numeric: tabular-nums; white-space: nowrap; }
 .etc-row .etc-text { font-size: 14px; }
 .etc-action { justify-self: end; }
 
@@ -393,6 +395,10 @@
   margin-top: 16px;
 }
 .loaded-note { color: var(--muted); font-size: 13px; }
+
+/* Refresh shows it is working; the list stays on screen meanwhile. */
+.btn.is-busy .icon { animation: spin 0.9s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
 
 /* ---------- Toast and confirm dialog ---------- */
 
@@ -452,7 +458,6 @@
   }
 
   .etc-person { padding-right: 104px; font-size: 15px; }
-  .etc-row .etc-text { display: block; }
   .etc-action { position: absolute; top: 9px; right: 0; padding: 0; }
 }
 
