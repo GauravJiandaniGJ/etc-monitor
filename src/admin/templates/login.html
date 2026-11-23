@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sign in • ETC Monitor</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="icon" href="{{ url_for('static', filename='assets/favicon.ico') }}">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+        .login-container {
+            background: #ffffff;
+            border-radius: 16px;
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+            padding: 40px;
+            width: 100%;
+            max-width: 400px;
+        }
+        .login-header { text-align: center; margin-bottom: 32px; }
+        .login-logo {
+            width: 64px;
+            height: 64px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border-radius: 16px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto 16px;
+            color: #ffffff;
+            font-size: 28px;
+            font-weight: 700;
+        }
+        .login-title { font-size: 24px; font-weight: 700; color: #1f2937; margin-bottom: 8px; }
+        .login-subtitle { color: #6b7280; font-size: 14px; }
+        .form-group { margin-bottom: 20px; }
+        .form-label { display: block; font-size: 14px; font-weight: 500; color: #374151; margin-bottom: 8px; }
+        .form-input {
+            width: 100%;
+            padding: 12px 16px;
+            border: 2px solid #e5e7eb;
+            border-radius: 10px;
+            font-size: 15px;
+            font-family: inherit;
+            color: #1f2937;
+            background: #ffffff;
+            outline: none;
+            transition: border-color 0.2s, box-shadow 0.2s;
+        }
+        .form-input:focus { border-color: #667eea; box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.15); }
+        .login-btn {
+            width: 100%;
+            padding: 14px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: #ffffff;
+            border: none;
+            border-radius: 10px;
+            font-size: 16px;
+            font-weight: 600;
+            font-family: inherit;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+        .login-btn:hover { transform: translateY(-1px); box-shadow: 0 10px 20px -10px rgba(102, 126, 234, 0.6); }
+        .login-btn:active { transform: translateY(0); }
+        .error-message {
+            background: #fef2f2;
+            border: 1px solid #fecaca;
+            color: #dc2626;
+            padding: 12px 16px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+            font-size: 14px;
+            text-align: center;
+        }
+    </style>
+</head>
+
+<body>
+    <main class="login-container">
+        <div class="login-header">
+            <div class="login-logo">E</div>
+            <h1 class="login-title">ETC Monitor</h1>
+            <p class="login-subtitle">Sign in to open the admin dashboard</p>
+        </div>
+
+        {% if error %}
+        <div class="error-message" role="alert">{{ error }}</div>
+        {% endif %}
+
+        <form method="POST" action="{{ url_for('login') }}">
+            <div class="form-group">
+                <label class="form-label" for="username">Username</label>
+                <input type="text" id="username" name="username" class="form-input" value="{{ username or '' }}"
+                    autocomplete="username" autocapitalize="none" spellcheck="false" required
+                    {% if not username %}autofocus{% endif %}>
+            </div>
+            <div class="form-group">
+                <label class="form-label" for="password">Password</label>
+                <input type="password" id="password" name="password" class="form-input"
+                    autocomplete="current-password" required {% if username %}autofocus{% endif %}>
+            </div>
+            <button type="submit" class="login-btn">Sign in</button>
+        </form>
+    </main>
+</body>
+
+</html>

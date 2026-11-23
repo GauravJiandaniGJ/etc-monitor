@@ -89,8 +89,10 @@ def db_manager(mock_settings):
     db = DBManager(mock_settings)
     
     # Run migrations to create schema
-    from src.database.migrations.versions.001_initial_schema import upgrade as upgrade_001
-    from src.database.migrations.versions.002_add_followup_fields import upgrade as upgrade_002
+    # Module names start with a digit, so they can't be imported with "from ... import".
+    import importlib
+    upgrade_001 = importlib.import_module('src.database.migrations.versions.001_initial_schema').upgrade
+    upgrade_002 = importlib.import_module('src.database.migrations.versions.002_add_followup_fields').upgrade
     
     with db.get_connection() as conn:
         upgrade_001(conn)

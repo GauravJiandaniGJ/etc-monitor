@@ -1,5 +1,14 @@
 /* ETC Monitor Dashboard JavaScript */
 
+// If the login session has expired, the API answers 401: go back to the login page.
+const originalFetch = window.fetch.bind(window);
+window.fetch = (...args) => originalFetch(...args).then((response) => {
+    if (response.status === 401) {
+        window.location.href = '/login';
+    }
+    return response;
+});
+
 let allReminders = [];
 let currentTab = 'all';
 
