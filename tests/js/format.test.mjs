@@ -36,6 +36,12 @@ test('formatClock shows IST 12-hour time', () => {
   assert.equal(formatClock(ist('2026-11-24T00:05:00')), '12:05 AM');
 });
 
+test('formatClock can include seconds, so each Refresh visibly changes "Updated"', () => {
+  assert.equal(formatClock(ist('2026-11-23T13:00:05'), { seconds: true }), '1:00:05 PM');
+  assert.equal(formatClock(ist('2026-11-24T00:05:42'), { seconds: true }), '12:05:42 AM');
+  assert.equal(formatClock(ist('2026-11-23T13:00:05')), '1:00 PM'); // default unchanged
+});
+
 test('relativeLabel counts towards and away from now', () => {
   assert.equal(relativeLabel(ist('2026-11-23T13:00:00'), now), 'in 28 min');
   assert.equal(relativeLabel(ist('2026-11-23T14:00:00'), now), 'in 1 h 28 min');

@@ -47,7 +47,7 @@ export function reminderTime(r) {
 
 function istParts(date) {
   const t = new Date(date.getTime() + IST_OFFSET_MIN * MINUTE);
-  return { y: t.getUTCFullYear(), m: t.getUTCMonth(), d: t.getUTCDate(), wd: t.getUTCDay(), h: t.getUTCHours(), mi: t.getUTCMinutes() };
+  return { y: t.getUTCFullYear(), m: t.getUTCMonth(), d: t.getUTCDate(), wd: t.getUTCDay(), h: t.getUTCHours(), mi: t.getUTCMinutes(), s: t.getUTCSeconds() };
 }
 
 function istDayNumber(date) {
@@ -58,10 +58,11 @@ function dayDiff(date, now) {
   return istDayNumber(date) - istDayNumber(now);
 }
 
-/** '1:00 PM' */
-export function formatClock(date) {
-  const { h, mi } = istParts(date);
-  return `${h % 12 || 12}:${String(mi).padStart(2, '0')} ${h < 12 ? 'AM' : 'PM'}`;
+/** '1:00 PM', or '1:00:05 PM' with { seconds: true } */
+export function formatClock(date, { seconds = false } = {}) {
+  const { h, mi, s } = istParts(date);
+  const secs = seconds ? `:${String(s).padStart(2, '0')}` : '';
+  return `${h % 12 || 12}:${String(mi).padStart(2, '0')}${secs} ${h < 12 ? 'AM' : 'PM'}`;
 }
 
 /** 'Today, Monday 23 November', 'Wednesday 25 November', 'Monday 4 January 2027' */

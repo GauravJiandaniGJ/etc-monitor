@@ -200,14 +200,21 @@ function confirmAction({ title, body, okLabel, tone = 'primary' }) {
 
 /* ---------- Loading ---------- */
 
+// Loads take ~0.1s, so keep "Refreshing…" up long enough to see that Refresh did something.
+// The data itself still shows as soon as it arrives.
+const MIN_BUSY_MS = 600;
+
 function setBusy(busy) {
   els.refresh.setAttribute('aria-busy', String(busy));
   els.refresh.classList.toggle('is-busy', busy);
+  const label = els.refresh.querySelector('span');
+  if (label) label.textContent = busy ? 'Refreshing…' : 'Refresh';
   els.noticeRetry.disabled = busy;
 }
 
 async function loadAll() {
   const seq = ++state.loadSeq;
+  const startedAt = Date.now();
   setBusy(true);
   try {
     const [bot, all, pending, rescheduled] = await Promise.all([
@@ -224,14 +231,15 @@ async function loadAll() {
     state.active = rowsOf(pending).concat(rowsOf(rescheduled));
     state.loaded = true;
     hideNotice();
-    els.updated.textContent = `Updated ${formatClock(new Date())}`;
+    els.updated.textContent = `Updated ${formatClock(new Date(), { seconds: true })}`;
     renderAll();
   } catch (err) {
     if (seq !== state.loadSeq || isStatus(err, 401)) return;
     showNotice(COPY.loadFailed);
     if (!state.loaded) renderNotLoaded();
   } finally {
-    if (seq === state.loadSeq) setBusy(false);
+    const wait = Math.max(0, MIN_BUSY_MS - (Date.now() - startedAt));
+    setTimeout(() => { if (seq === state.loadSeq) setBusy(false); }, wait);
   }
 }
 

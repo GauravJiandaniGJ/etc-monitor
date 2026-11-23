@@ -86,7 +86,10 @@ class TestDashboardScripts:
         assert 'updateRelativeTimes' in intervals[0][2]
         for f, n, line in _js_lines():
             if 'setTimeout(' in line:
-                assert 'hideToast' in line, f'{f}:{n}: {line.strip()}'
+                # Only one-shot UI timers: hiding a toast, or ending the "Refreshing…" state.
+                assert 'hideToast' in line or 'setBusy(false)' in line, f'{f}:{n}: {line.strip()}'
+                for loader in ('loadAll', 'loadMore', 'fetch', 'getReminders', 'getBotStatus'):
+                    assert loader not in line, f'{f}:{n}: a timer must never load data: {line.strip()}'
             assert 'location.reload' not in line, f'{f}:{n}'
 
     def test_js_never_injects_html(self):
