@@ -39,6 +39,10 @@ async function request(path, { method = 'GET' } = {}) {
     const message = data && typeof data.error === 'string' && data.error ? data.error : '';
     throw new ApiError(message, response.status);
   }
+  if (data === null || typeof data !== 'object') {
+    // e.g. a proxy's HTML page: treat it as a failure so the data on screen stays.
+    throw new ApiError('The server sent an unexpected reply. Please try again.', response.status);
+  }
   return data;
 }
 

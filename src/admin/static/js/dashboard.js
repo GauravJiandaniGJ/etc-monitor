@@ -14,6 +14,7 @@ import {
   parseServerTime, reminderTime, formatClock, formatShortDateTime, relativeLabel, isActive,
   splitUpNext, groupByDay, displayName, displayChannel, matchesSearch,
 } from './format.js';
+import { createGate } from './gate.js';
 
 const PAGE_SIZE = 1000;
 const UP_NEXT_LIMIT = 10;
@@ -464,12 +465,23 @@ function updateRelativeTimes() {
 
 /* ---------- Actions ---------- */
 
+// One action at a time: a second click while one is loading or confirming is refused.
+const actionGate = createGate();
+
+function showBusy() {
+  showToast('Please wait for the current action to finish.');
+}
+
 function reportStale(r) {
   showToast(`This ETC is already ${statusLabel(r && r.status).toLowerCase()}. The list has been updated.`);
   loadAll();
 }
 
 async function handleCancel(button) {
+  if (!(await actionGate.run(() => cancelFlow(button)))) showBusy();
+}
+
+async function cancelFlow(button) {
   const id = button.dataset.id;
   button.disabled = true;
   try {
@@ -504,6 +516,10 @@ async function handleCancel(button) {
 
 async function handleBotToggle() {
   closeMenu(true);
+  if (!(await actionGate.run(botToggleFlow))) showBusy();
+}
+
+async function botToggleFlow() {
   const pausing = !state.botPaused;
   const ok = await confirmAction(pausing
     ? { title: 'Pause bot', body: COPY.pause, okLabel: 'Pause bot' }
@@ -521,6 +537,10 @@ async function handleBotToggle() {
 
 async function handleEod() {
   closeMenu(true);
+  if (!(await actionGate.run(eodFlow))) showBusy();
+}
+
+async function eodFlow() {
   const ok = await confirmAction({
     title: 'Run EOD check now',
     body: COPY.eod,

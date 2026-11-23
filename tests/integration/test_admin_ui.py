@@ -99,3 +99,18 @@ class TestDashboardScripts:
         response = client.get(f'/static/js/{name}')
         assert response.status_code == 200
         assert 'javascript' in response.mimetype
+
+
+def _function_body(source, name):
+    start = source.index(f'function {name}(')
+    end = source.find('\nasync function ', start + 1)
+    end2 = source.find('\nfunction ', start + 1)
+    ends = [e for e in (end, end2) if e != -1]
+    return source[start:min(ends) if ends else len(source)]
+
+
+@pytest.mark.integration
+def test_every_action_runs_through_the_one_at_a_time_gate():
+    source = (JS_DIR / 'dashboard.js').read_text()
+    for handler in ('handleCancel', 'handleBotToggle', 'handleEod'):
+        assert 'actionGate.run(' in _function_body(source, handler), handler

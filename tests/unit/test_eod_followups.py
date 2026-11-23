@@ -1,7 +1,8 @@
 """EOD follow-up selection (ReminderRepository.get_pending_followups).
 
 Runs on SQLite always. Also runs on PostgreSQL when a throwaway local server is
-provided through ETC_TEST_PG_HOST / ETC_TEST_PG_PORT / ETC_TEST_PG_DB / ETC_TEST_PG_USER
+provided through ETC_TEST_PG_HOST / ETC_TEST_PG_PORT / ETC_TEST_PG_DB / ETC_TEST_PG_USER.
+The fixture DROPS the reminders tables, so ETC_TEST_PG_DB must end in _test.
 (production uses PostgreSQL, where the old SQLite-only query failed).
 """
 import os
@@ -44,6 +45,9 @@ def _postgres_repo(settings, tmp_path):
     env = {k: os.environ.get(f'ETC_TEST_PG_{k}') for k in ('HOST', 'PORT', 'DB', 'USER')}
     if not all(env.values()):
         pytest.skip('set ETC_TEST_PG_HOST/PORT/DB/USER to run against a throwaway PostgreSQL')
+    if not env['DB'].endswith('_test'):
+        # This fixture drops the reminders tables: never let it near a real database.
+        pytest.skip('ETC_TEST_PG_DB must name a throwaway database ending in _test')
     settings.database_type = 'postgresql'
     settings.database_host = env['HOST']
     settings.database_port = int(env['PORT'])
@@ -87,3 +91,11 @@ def test_excludes_when_user_replied_after_reminder(repo):
 def test_excludes_pending_reminders(repo):
     repo.create(_make_reminder(status=ReminderStatus.PENDING))
     assert repo.get_pending_followups() == []
+
+
+def test_postgres_fixture_refuses_a_database_not_named_test(mock_settings, tmp_path, monkeypatch):
+    """The fixture drops tables, so it must never touch a real database by mistake."""
+    for key, value in {'HOST': '127.0.0.1', 'PORT': '1', 'DB': 'etc_monitor', 'USER': 'postgres'}.items():
+        monkeypatch.setenv(f'ETC_TEST_PG_{key}', value)
+    with pytest.raises(pytest.skip.Exception, match='_test'):
+        _postgres_repo(mock_settings, tmp_path)
