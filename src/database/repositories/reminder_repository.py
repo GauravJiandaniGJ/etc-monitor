@@ -1,6 +1,6 @@
 """Reminder repository for database operations."""
 from typing import Optional, List, Union
-from datetime import datetime
+from datetime import datetime, timedelta
 from src.core.models import Reminder, ReminderStatus
 from src.database.db_manager import DBManager
 from src.utils.logger import get_logger
@@ -211,19 +211,24 @@ class ReminderRepository:
         Returns:
             List of reminders needing follow-up
         """
+        # The 24-hour cutoff is computed here, not with SQLite's datetime(),
+        # which doesn't exist in PostgreSQL. It uses the same clock and string
+        # format as mark_sent() uses for sent_at, so it compares correctly on
+        # every supported database.
+        cutoff = self._datetime_to_str(datetime.now() - timedelta(hours=24))
         query = '''
             SELECT * FROM reminders
             WHERE status = 'sent'
             AND COALESCE(reminder_sent_at, sent_at) IS NOT NULL
             AND followup_sent_at IS NULL
-            AND COALESCE(reminder_sent_at, sent_at) >= datetime('now', '-24 hours')
+            AND COALESCE(reminder_sent_at, sent_at) >= ?
             AND (
                 last_user_update_at IS NULL
                 OR last_user_update_at <= COALESCE(reminder_sent_at, sent_at)
             )
             ORDER BY created_at ASC
         '''
-        rows = self.db.fetch_all(query)
+        rows = self.db.fetch_all(query, (cutoff,))
         return [self._row_to_reminder(row) for row in rows]
 
     def get_due(self, before: datetime) -> List[Reminder]:
