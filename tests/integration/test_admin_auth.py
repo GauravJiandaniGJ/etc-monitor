@@ -250,6 +250,26 @@ class TestBruteForceProtection:
         # A different /64 is a different client.
         assert _login_from(client, '2001:db8:1:3::1', password=PASSWORD).status_code == 302
 
+    def test_ipv4_mapped_addresses_count_as_their_ipv4_address(self, client):
+        # ::ffff:a.b.c.d must not collapse into one shared IPv6 /64 key.
+        for _ in range(admin_app.MAX_FAILURES_PER_CLIENT):
+            assert _login_from(client, '::ffff:198.51.100.20').status_code == 401
+        assert _login_from(client, '198.51.100.20', password=PASSWORD).status_code == 429
+        assert _login_from(client, '::ffff:198.51.100.21', password=PASSWORD).status_code == 302
+
+    def test_ipv4_mapped_cloudflare_edge_is_still_recognised(self, client):
+        edge = f'::ffff:{CLOUDFLARE_EDGE}'
+        for i in range(admin_app.MAX_FAILURES_PER_CLIENT):
+            assert _login_from(client, f'198.51.100.{30 + i}', edge=edge).status_code == 401
+        assert _login_from(client, '198.51.100.99', password=PASSWORD, edge=edge).status_code == 302
+
+    def test_invalid_cf_connecting_ip_is_ignored(self, client, capsys):
+        response = _login_from(client, 'not-an-ip\x07')
+        assert response.status_code == 401
+        output = capsys.readouterr().out
+        assert 'not-an-ip' not in output
+        assert f'from {CLOUDFLARE_EDGE}' in output
+
 
 class TestLoginThrottle:
     def test_lockout_ends_when_failures_age_out(self):

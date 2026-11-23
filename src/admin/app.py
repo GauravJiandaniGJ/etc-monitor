@@ -36,9 +36,6 @@ MAX_FAILURES_PER_CLIENT = 5
 MAX_FAILURES_TOTAL = 50
 FAILURE_WINDOW_SECONDS = 15 * 60
 
-# Requests from these addresses come through the local nginx proxy.
-LOCAL_PROXY_ADDRS = ('127.0.0.1', '::1')
-
 # Cloudflare's published ranges (https://www.cloudflare.com/ips/, checked 2026-11-23).
 # CF-Connecting-IP is only trusted when nginx says the request came from one of these;
 # otherwise anyone reaching the server directly could forge it.
@@ -130,41 +127,53 @@ def _credentials_match(settings: Settings, username: str, password: str) -> bool
     return username_ok and password_ok
 
 
-def _is_cloudflare(address: str) -> bool:
+def _parse_ip(address: str):
+    """Parse an IP address, or return None. IPv4-mapped IPv6 (::ffff:a.b.c.d) becomes plain IPv4."""
     try:
-        ip = ipaddress.ip_address(address)
+        ip = ipaddress.ip_address(address.strip())
     except ValueError:
-        return False
-    return any(ip in network for network in CLOUDFLARE_NETWORKS)
+        return None
+    if ip.version == 6 and ip.ipv4_mapped:
+        return ip.ipv4_mapped
+    return ip
+
+
+def _is_cloudflare(ip) -> bool:
+    return ip is not None and any(ip in network for network in CLOUDFLARE_NETWORKS)
 
 
 def _client_ip() -> str:
     """Client IP used for login throttling and logs, resistant to forged headers.
 
     - Direct connection (e.g. to port 8090): the socket address.
-    - Through nginx: nginx overwrites X-Real-IP with the address that connected
-      to it. If that is Cloudflare, the client is in CF-Connecting-IP (set by
-      Cloudflare); if not, the request bypassed Cloudflare and X-Real-IP is
-      the client itself.
+    - Through the local nginx: nginx overwrites X-Real-IP with the address that
+      connected to it (`proxy_set_header X-Real-IP $remote_addr` in the server's
+      site config). If that is Cloudflare, the client is in CF-Connecting-IP
+      (set by Cloudflare); if not, the request bypassed Cloudflare and
+      X-Real-IP is the client itself.
+    Header values that aren't valid IP addresses are ignored.
     """
-    remote = request.remote_addr or 'unknown'
-    if remote not in LOCAL_PROXY_ADDRS:
-        return remote
-    peer = request.headers.get('X-Real-IP', '').strip() or remote
+    remote = _parse_ip(request.remote_addr or '')
+    if remote is None:
+        return request.remote_addr or 'unknown'
+    if not remote.is_loopback:
+        return str(remote)
+    peer = _parse_ip(request.headers.get('X-Real-IP', '')) or remote
     if _is_cloudflare(peer):
-        return request.headers.get('CF-Connecting-IP', '').strip() or peer
-    return peer
+        client = _parse_ip(request.headers.get('CF-Connecting-IP', ''))
+        if client is not None:
+            return str(client)
+    return str(peer)
 
 
 def _throttle_key(client_ip: str) -> str:
     """Group IPv6 clients by /64, since one user can easily switch addresses inside it."""
-    try:
-        ip = ipaddress.ip_address(client_ip)
-    except ValueError:
+    ip = _parse_ip(client_ip)
+    if ip is None:
         return client_ip
     if ip.version == 6:
         return str(ipaddress.ip_network(f'{ip}/64', strict=False))
-    return client_ip
+    return str(ip)
 
 
 def create_app(settings: Optional[Settings] = None) -> Flask:
