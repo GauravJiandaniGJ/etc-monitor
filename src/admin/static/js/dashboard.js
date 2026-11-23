@@ -444,7 +444,7 @@ function renderList() {
     els.loadedNote.textContent = `Showing ${inTab.length} of ${tabCount(state.tab)}`;
   }
   els.showMore.hidden = !canLoadMore;
-  els.listFooter.hidden = false;
+  els.listFooter.hidden = !query && !inTab.length && !canLoadMore;
 }
 
 /* ---------- Relative-time clock (no network) ---------- */

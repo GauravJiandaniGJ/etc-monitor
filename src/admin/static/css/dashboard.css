@@ -183,6 +183,7 @@
 }
 .empty .icon { font-size: 30px; color: var(--faint); }
 .empty p { max-width: 46ch; }
+.etc-list > .empty { border-top: 0; }
 
 /* Error notice with "Try again" */
 
@@ -216,7 +217,7 @@
 
 .upnext-row {
   display: grid;
-  grid-template-columns: 92px minmax(0, 1.1fr) minmax(0, 2fr) auto;
+  grid-template-columns: 120px minmax(0, 1.1fr) minmax(0, 2fr) auto;
   gap: 16px;
   align-items: center;
   padding: 12px 0;
@@ -284,7 +285,6 @@
 .past-due-head .icon { margin-top: 2px; color: var(--accent); font-size: 16px; }
 .past-due-head strong { color: var(--text); font-weight: 600; }
 
-.past-due .upnext-row { grid-template-columns: 132px minmax(0, 1.1fr) minmax(0, 2fr) auto; }
 .past-due .upnext-time { color: var(--text-2); font-size: 14px; font-weight: 500; white-space: normal; }
 
 /* ---------- All ETCs ---------- */
@@ -351,7 +351,8 @@
 }
 
 .etc-row {
-  padding: 11px 0;
+  min-height: 56px; /* same height with or without a Cancel button */
+  padding: 10px 0;
   border-bottom: 1px solid var(--border);
   font-size: 14px;
 }
@@ -419,6 +420,8 @@
 .toast.is-error { background: var(--danger); color: var(--surface); }
 
 .dialog {
+  /* base.css zeroes margins; a modal dialog needs auto margins to sit in the middle. */
+  margin: auto;
   width: min(440px, calc(100vw - 32px));
   padding: 22px 22px 18px;
   border: 1px solid var(--border);
@@ -441,6 +444,7 @@
   .etc-row {
     display: block;
     position: relative;
+    min-height: 0;
     padding: 14px 0;
   }
 
@@ -462,11 +466,19 @@
 }
 
 @media (max-width: 720px) {
+  /* Two rows: brand, theme and Sign out on top; bot status and Refresh below. */
   .topbar-inner {
     flex-wrap: wrap;
+    gap: 10px 8px;
     padding: 10px 16px 12px;
   }
-  .topbar-controls { justify-content: flex-start; }
+  .topbar-inner::after { content: ""; order: 2; flex-basis: 100%; height: 0; }
+  .topbar-controls { display: contents; }
+  .brand { flex: 1 0 auto; order: 0; }
+  #theme-btn,
+  #logout-link { order: 1; }
+  .bot-control,
+  #refresh-btn { order: 3; }
   .updated-label { display: none; }
 
   .page { padding: 24px 16px 72px; }
